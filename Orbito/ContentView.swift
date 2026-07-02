@@ -1,29 +1,292 @@
 import SwiftUI
 import Combine
+import AVFoundation
 
 struct ContentView: View {
     @State private var selectedGame: SelectedGame?
+    @State private var selectedPuzzle: PuzzleLevel?
 
     var body: some View {
-        if let selectedGame {
+        if let selectedPuzzle {
+            ShooterPrototypeView(
+                initialGameMode: .counter,
+                initialDifficulty: .medium,
+                isAimerEnabled: true,
+                onBackToMenu: {
+                    self.selectedPuzzle = nil
+                },
+                puzzleLevel: selectedPuzzle
+            )
+        } else if let selectedGame {
             ShooterPrototypeView(
                 initialGameMode: selectedGame.mode,
                 initialDifficulty: selectedGame.difficulty,
+                isAimerEnabled: selectedGame.isAimerEnabled,
                 onBackToMenu: {
                     self.selectedGame = nil
-                }
+                },
+                puzzleLevel: nil
             )
         } else {
-            MainMenuView { mode, difficulty in
-                selectedGame = SelectedGame(mode: mode, difficulty: difficulty)
-            }
+            MainMenuView(
+                            onSelectMode: { mode, difficulty, isAimerEnabled in
+                                selectedGame = SelectedGame(
+                                    mode: mode,
+                                    difficulty: difficulty,
+                                    isAimerEnabled: isAimerEnabled
+                                )
+                            },
+                            onSelectPuzzle: { puzzle in
+                                selectedPuzzle = puzzle
+                            }
+                        )
         }
     }
 }
 
-struct SelectedGame {
-    let mode: GameMode
-    let difficulty: Difficulty
+
+final class SoundManager {
+    static let shared = SoundManager()
+
+    private var players: [String: AVAudioPlayer] = [:]
+    private let volumeKey = "soundEffectsVolume"
+
+    private init() { }
+
+    private var soundEffectsVolume: Float {
+        let savedVolume = UserDefaults.standard.object(forKey: volumeKey) as? Double
+        return Float(savedVolume ?? 0.85)
+    }
+
+    func play(_ name: String, delay: TimeInterval = 0) {
+        let playBlock = {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
+                print("Missing sound: \(name).wav")
+                return
+            }
+
+            do {
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.volume = self.soundEffectsVolume
+                player.prepareToPlay()
+                player.play()
+                self.players[name] = player
+            } catch {
+                print("Sound error for \(name): \(error)")
+            }
+        }
+
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                playBlock()
+            }
+        } else {
+            playBlock()
+        }
+    }
+}
+
+
+final class AchievementManager {
+    static let shared = AchievementManager()
+
+    private let defaults = UserDefaults.standard
+
+    private init() { }
+
+    private func unlockIfNeeded(title: String, key: String, condition: Bool) -> String? {
+        guard condition else { return nil }
+        guard defaults.bool(forKey: key) == false else { return nil }
+
+        defaults.set(true, forKey: key)
+        return title
+    }
+
+    func recordDrop(count: Int, mode: GameMode) -> [String] {
+        var unlocked: [String] = []
+
+        switch mode {
+        case .classic:
+            let currentBest = defaults.integer(forKey: "largestDropClassic")
+            let newBest = max(currentBest, count)
+            defaults.set(newBest, forKey: "largestDropClassic")
+
+            if let title = unlockIfNeeded(
+                title: "Classic Dropper I",
+                key: "achievementClassicDrop5",
+                condition: newBest >= 5
+            ) {
+                unlocked.append(title)
+            }
+
+            if let title = unlockIfNeeded(
+                title: "Classic Dropper II",
+                key: "achievementClassicDrop10",
+                condition: newBest >= 10
+            ) {
+                unlocked.append(title)
+            }
+
+        case .counter:
+            let currentBest = defaults.integer(forKey: "largestDropCounter")
+            let newBest = max(currentBest, count)
+            defaults.set(newBest, forKey: "largestDropCounter")
+
+            if let title = unlockIfNeeded(
+                title: "Counter Dropper I",
+                key: "achievementCounterDrop5",
+                condition: newBest >= 5
+            ) {
+                unlocked.append(title)
+            }
+
+            if let title = unlockIfNeeded(
+                title: "Counter Dropper II",
+                key: "achievementCounterDrop10",
+                condition: newBest >= 10
+            ) {
+                unlocked.append(title)
+            }
+        }
+
+        return unlocked
+    }
+
+    func recordNormalMatch(count: Int) -> [String] {
+        let current = defaults.integer(forKey: "normalOrbsMatched")
+        let newTotal = current + count
+        defaults.set(newTotal, forKey: "normalOrbsMatched")
+
+        return [
+            unlockIfNeeded(
+                title: "Normal Master",
+                key: "achievementNormalMaster",
+                condition: newTotal >= 300
+            )
+        ].compactMap { $0 }
+    }
+
+    func recordScore(totalPoints: Int) -> [String] {
+        [
+            unlockIfNeeded(
+                title: "Rising Score",
+                key: "achievementScore25000",
+                condition: totalPoints >= 25000
+            ),
+            unlockIfNeeded(
+                title: "Energy Collector",
+                key: "achievementScore50000",
+                condition: totalPoints >= 50000
+            ),
+            unlockIfNeeded(
+                title: "Titan Legend",
+                key: "achievementScore100000",
+                condition: totalPoints >= 100000
+            )
+        ].compactMap { $0 }
+    }
+
+    func recordLevelComplete(difficulty: Difficulty, isAimerEnabled: Bool) -> [String] {
+        var unlocked: [String] = []
+
+        let currentCompletedLevels = defaults.integer(forKey: "totalLevelsCompleted")
+        let newCompletedLevels = currentCompletedLevels + 1
+        defaults.set(newCompletedLevels, forKey: "totalLevelsCompleted")
+
+        if let title = unlockIfNeeded(
+            title: "End Scene",
+            key: "achievementEndScene",
+            condition: newCompletedLevels >= 2
+        ) {
+            unlocked.append(title)
+        }
+
+        if difficulty == .hard {
+            let current = defaults.integer(forKey: "hardLevelsCompleted")
+            let newTotal = current + 1
+            defaults.set(newTotal, forKey: "hardLevelsCompleted")
+
+            if let title = unlockIfNeeded(
+                title: "Hard Survivor",
+                key: "achievementHard10",
+                condition: newTotal >= 10
+            ) {
+                unlocked.append(title)
+            }
+
+            if let title = unlockIfNeeded(
+                title: "Hard Champion",
+                key: "achievementHard100",
+                condition: newTotal >= 100
+            ) {
+                unlocked.append(title)
+            }
+        }
+
+        if !isAimerEnabled {
+            let current = defaults.integer(forKey: "noAimerWins")
+            let newTotal = current + 1
+            defaults.set(newTotal, forKey: "noAimerWins")
+
+            if let title = unlockIfNeeded(
+                title: "No Aimer Win",
+                key: "achievementNoAimerWin",
+                condition: newTotal >= 1
+            ) {
+                unlocked.append(title)
+            }
+
+            if difficulty == .hard {
+                let hardCurrent = defaults.integer(forKey: "hardNoAimerWins")
+                let hardNewTotal = hardCurrent + 1
+                defaults.set(hardNewTotal, forKey: "hardNoAimerWins")
+
+                if let title = unlockIfNeeded(
+                    title: "Hard No Aimer",
+                    key: "achievementHardNoAimer",
+                    condition: hardNewTotal >= 1
+                ) {
+                    unlocked.append(title)
+                }
+            }
+        }
+
+        return unlocked
+    }
+
+    func recordPurchase(_ powerUp: ActivePowerUp) -> [String] {
+        switch powerUp {
+        case .bomb:
+            defaults.set(true, forKey: "bombPurchased")
+            return [
+                unlockIfNeeded(
+                    title: "Bomb Buyer",
+                    key: "achievementBombBuyer",
+                    condition: true
+                )
+            ].compactMap { $0 }
+
+        case .typeFreeze:
+            defaults.set(true, forKey: "freezePurchased")
+            return [
+                unlockIfNeeded(
+                    title: "Freeze Buyer",
+                    key: "achievementFreezeBuyer",
+                    condition: true
+                )
+            ].compactMap { $0 }
+
+        case .typeErase:
+            defaults.set(true, forKey: "erasePurchased")
+            return [
+                unlockIfNeeded(
+                    title: "Erase Buyer",
+                    key: "achievementEraseBuyer",
+                    condition: true
+                )
+            ].compactMap { $0 }
+        }
+    }
 }
 
 // MARK: - Game Mode
@@ -44,8 +307,32 @@ enum OrbType: String, CaseIterable, Identifiable {
     case electric
     case boulder
     case normal
+    
+    
 
     var id: String { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .ember: return "Fire"
+        case .tide: return "Water"
+        case .sprout: return "Plant"
+        case .electric: return "Electric"
+        case .boulder: return "Rock"
+        case .normal: return "Normal"
+        }
+    }
+    
+    var assetName: String {
+        switch self {
+        case .ember: return "orb_fire"
+        case .tide: return "orb_water"
+        case .sprout: return "orb_plant"
+        case .electric: return "orb_electric"
+        case .boulder: return "orb_rock"
+        case .normal: return "orb_normal"
+        }
+    }
 
     var symbol: String {
         switch self {
@@ -94,6 +381,7 @@ struct MovingOrb {
     var type: OrbType
     var position: CGPoint
     var velocity: CGVector
+    var powerUp: ActivePowerUp?
 }
 
 struct StuckOrb: Identifiable, Equatable {
@@ -119,6 +407,30 @@ struct ClearEffect: Identifiable {
     let position: CGPoint
     let style: Style
 }
+
+enum ActivePowerUp: String, Identifiable {
+    case bomb
+    case typeFreeze
+    case typeErase
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .bomb: return "Bomb Orb"
+        case .typeFreeze: return "Type Freeze"
+        case .typeErase: return "Type Erase"
+        }
+    }
+    var assetName: String {
+            switch self {
+            case .bomb: return "orb_bomb"
+            case .typeFreeze: return "orb_freeze"
+            case .typeErase: return "orb_erase"
+            }
+        }
+}
+
 
 enum Difficulty: String, CaseIterable, Identifiable {
     case easy = "Easy"
@@ -353,28 +665,160 @@ enum Difficulty: String, CaseIterable, Identifiable {
         return largest
     }
 
-        private func generateHardRows(gameMode: GameMode) -> [[OrbType?]] {
+    private func generateHardRows(gameMode: GameMode) -> [[OrbType?]] {
         let types = availableTypes(for: gameMode)
         var grid = Array(
             repeating: Array<OrbType?>(repeating: nil, count: columnCount),
             count: rowCount
         )
 
-        // Hard: mostly singles, very few pairs
-        let pairCount = 3
-        for _ in 0..<pairCount {
-            placePair(in: &grid, types: types)
-        }
+        if gameMode == .counter {
+            // Counter Hard is different because single type-advantage clears are powerful.
+            // Keep visual touching groups capped at 2 so the board does not start with large chains.
+            let pairCount = 3
+            for _ in 0..<pairCount {
+                placeCounterSafePair(in: &grid, types: types)
+            }
 
-        for row in 0..<rowCount {
-            for col in 0..<columnCount {
-                if grid[row][col] == nil {
-                    grid[row][col] = randomTypeAvoidingLargeGroups(row: row, col: col, grid: grid, types: types)
+            for row in 0..<rowCount {
+                for col in 0..<columnCount {
+                    if grid[row][col] == nil {
+                        grid[row][col] = randomTypeAvoidingCounterTouchGroups(
+                            row: row,
+                            col: col,
+                            grid: grid,
+                            types: types
+                        )
+                    }
+                }
+            }
+        } else {
+            // Classic Hard: mostly singles, very few pairs.
+            let pairCount = 3
+            for _ in 0..<pairCount {
+                placePair(in: &grid, types: types)
+            }
+
+            for row in 0..<rowCount {
+                for col in 0..<columnCount {
+                    if grid[row][col] == nil {
+                        grid[row][col] = randomTypeAvoidingLargeGroups(row: row, col: col, grid: grid, types: types)
+                    }
                 }
             }
         }
 
         return grid
+    }
+
+    private func placeCounterSafePair(in grid: inout [[OrbType?]], types: [OrbType]) {
+        guard let colsCount = grid.first?.count else { return }
+        let rowsCount = grid.count
+        let directions = [(0, 1), (1, 0)]
+
+        for _ in 0..<120 {
+            let type = types.randomElement()!
+            let row = Int.random(in: 0..<rowsCount)
+            let col = Int.random(in: 0..<colsCount)
+            let direction = directions.randomElement()!
+            let secondRow = row + direction.0
+            let secondCol = col + direction.1
+
+            guard secondRow >= 0,
+                  secondRow < rowsCount,
+                  secondCol >= 0,
+                  secondCol < colsCount else { continue }
+
+            guard grid[row][col] == nil,
+                  grid[secondRow][secondCol] == nil else { continue }
+
+            var testGrid = grid
+            testGrid[row][col] = type
+            testGrid[secondRow][secondCol] = type
+
+            if largestVisualTouchingGroup(in: testGrid) <= 2 {
+                grid = testGrid
+                return
+            }
+        }
+    }
+
+    private func randomTypeAvoidingCounterTouchGroups(row: Int, col: Int, grid: [[OrbType?]], types: [OrbType]) -> OrbType {
+        let shuffledTypes = types.shuffled()
+
+        for type in shuffledTypes {
+            var testGrid = grid
+            testGrid[row][col] = type
+
+            if largestVisualTouchingGroup(in: testGrid) <= 2 {
+                return type
+            }
+        }
+
+        return shuffledTypes.first ?? types.randomElement()!
+    }
+
+    private func largestVisualTouchingGroup(in rows: [[OrbType?]]) -> Int {
+        let rowSpacing: CGFloat = 0.82
+        let colSpacing: CGFloat = 0.92
+        let touchDistance: CGFloat = 1.15
+
+        func position(row: Int, col: Int) -> CGPoint {
+            let rowOffset: CGFloat = row.isMultiple(of: 2) ? 0 : colSpacing / 2
+            return CGPoint(
+                x: rowOffset + CGFloat(col) * colSpacing,
+                y: CGFloat(row) * rowSpacing
+            )
+        }
+
+        var visited = Set<String>()
+        var largest = 0
+
+        for row in 0..<rows.count {
+            for col in 0..<rows[row].count {
+                guard let type = rows[row][col] else { continue }
+
+                let startKey = "\(row)-\(col)"
+                if visited.contains(startKey) { continue }
+
+                var stack = [(row, col)]
+                var count = 0
+
+                while let current = stack.popLast() {
+                    let currentKey = "\(current.0)-\(current.1)"
+                    if visited.contains(currentKey) { continue }
+                    visited.insert(currentKey)
+
+                    guard rows[current.0][current.1] == type else { continue }
+                    count += 1
+
+                    let currentPosition = position(row: current.0, col: current.1)
+
+                    for neighborRow in max(0, current.0 - 1)...min(rows.count - 1, current.0 + 1) {
+                        for neighborCol in max(0, current.1 - 1)...min(rows[neighborRow].count - 1, current.1 + 1) {
+                            if neighborRow == current.0 && neighborCol == current.1 { continue }
+                            guard rows[neighborRow][neighborCol] == type else { continue }
+
+                            let neighborKey = "\(neighborRow)-\(neighborCol)"
+                            if visited.contains(neighborKey) { continue }
+
+                            let neighborPosition = position(row: neighborRow, col: neighborCol)
+                            let dx = currentPosition.x - neighborPosition.x
+                            let dy = currentPosition.y - neighborPosition.y
+                            let distance = sqrt(dx * dx + dy * dy)
+
+                            if distance <= touchDistance {
+                                stack.append((neighborRow, neighborCol))
+                            }
+                        }
+                    }
+                }
+
+                largest = max(largest, count)
+            }
+        }
+
+        return largest
     }
 
     private func differentRandomType(from first: OrbType, _ second: OrbType? = nil, in types: [OrbType]) -> OrbType {
@@ -390,116 +834,160 @@ enum Difficulty: String, CaseIterable, Identifiable {
 struct ShooterPrototypeView: View {
     let initialGameMode: GameMode
     let initialDifficulty: Difficulty
+    let isAimerEnabled: Bool
     let onBackToMenu: () -> Void
+    let puzzleLevel: PuzzleLevel?
     @State private var difficulty: Difficulty = .easy
     private var playWidth: CGFloat {
         let colSpacing = orbSize * 0.92
         return orbSize + CGFloat(difficulty.columnCount - 1) * colSpacing
     }
-    private let playHeight: CGFloat = 560
+    private let playHeight: CGFloat = 610
     private let orbSize: CGFloat = 34
-    private let launcherY: CGFloat = 510
+    private let launcherY: CGFloat = 560
     private let shotSpeed: CGFloat = 8
     private let shotCollisionDistance: CGFloat = 29
     private let boardDropAmount: CGFloat = 28
     private let startingCeilingY: CGFloat = 30
-    private let dangerLineY: CGFloat = 455
+    private let dangerLineY: CGFloat = 505
 
     @State private var gameMode: GameMode = .classic
     @State private var aimAngle: Double = -90
     @State private var lastStableAimAngle: Double = -90
     @State private var currentType: OrbType = .tide
+    @State private var nextType: OrbType = .ember
+    @AppStorage("totalPoints") private var totalPoints: Int = 0
+    @AppStorage("bombOrbCount") private var bombOrbCount: Int = 0
+    @AppStorage("typeFreezeCount") private var typeFreezeCount: Int = 0
+    @AppStorage("typeEraseCount") private var typeEraseCount: Int = 0
+    @State private var activePowerUp: ActivePowerUp?
+    @State private var frozenType: OrbType?
+    @State private var frozenShotsRemaining: Int = 0
+    @State private var showFreezeTypePicker: Bool = false
+    @State private var showPowerUpPicker: Bool = false
+    @State private var levelPoints: Int = 0
+    @State private var lastCompletedLevelPoints: Int = 0
     @State private var movingOrb: MovingOrb?
     @State private var stuckOrbs: [StuckOrb] = []
     @State private var fallingOrbs: [FallingOrb] = []
     @State private var clearEffects: [ClearEffect] = []
     @State private var ceilingY: CGFloat = 30
     @State private var missCount: Int = 0
-    @State private var isGameOver: Bool = false
     @State private var isLevelClear: Bool = false
+    @State private var isGameOver: Bool = false
+    @State private var puzzleShotsUsed: Int = 0
+    @State private var isPuzzleMode: Bool = false
     @State private var showRules: Bool = false
     @State private var levelNumber: Int = 1
+    @State private var unlockedAchievementTitle: String?
 
     private let gameTimer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                Button {
-                    onBackToMenu()
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.headline)
+            GameTopHUDView(
+                modeTitle: gameMode.rawValue,
+                levelNumber: levelNumber,
+                difficulty: difficulty,
+                score: totalPoints,
+                nextType: nextType,
+                activePowerUp: activePowerUp,
+                frozenType: frozenType,
+                frozenShotsRemaining: frozenShotsRemaining,
+                currentMisses: missCount,
+                maxMisses: difficulty.missesBeforeDrop,
+                onBack: onBackToMenu,
+                onRules: {
+                    showRules = true
+                },
+                onPowerUp: {
+                    showPowerUpPicker = true
                 }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Text("Element Clash")
-                    .font(.largeTitle.bold())
-
-                Spacer()
-
-                Color.clear
-                    .frame(width: 44, height: 34)
-            }
-            .padding(.horizontal)
-
-            Text("Level \(levelNumber)")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            Text(difficulty.displayName)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-
-            VStack(spacing: 6) {
-                DangerMeterView(
-                    currentMisses: missCount,
-                    maxMisses: difficulty.missesBeforeDrop
-                )
-                .frame(width: playWidth, height: 14)
-
-                HStack(spacing: 12) {
-                    if isGameOver {
-                        Text("Game Over")
-                            .font(.headline)
-                            .foregroundStyle(.red)
-                    }
-
-                    if isLevelClear {
-                        Text("Level Clear!")
-                            .font(.headline)
-                            .foregroundStyle(.green)
-                    }
-                }
-            }
+            )
+            .padding(.horizontal, 18)
 
             ZStack {
-                RoundedRectangle(cornerRadius: 22)
-                    .fill(.black.opacity(0.08))
-                    .frame(width: playWidth, height: playHeight)
+                ZStack {
+                    Image("titan_board_bg")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: playWidth, height: playHeight)
+                        .clipShape(RoundedRectangle(cornerRadius: 28))
 
-                Rectangle()
-                    .fill(.secondary.opacity(0.35))
-                    .frame(width: playWidth - 28, height: 4)
+                    RoundedRectangle(cornerRadius: 28)
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    .black.opacity(0.10),
+                                    .clear,
+                                    .black.opacity(0.18)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
+                    RoundedRectangle(cornerRadius: 28)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    .white.opacity(0.38),
+                                    .cyan.opacity(0.20),
+                                    .orange.opacity(0.22)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 2
+                        )
+                }
+                .frame(width: playWidth, height: playHeight)
+                .shadow(color: .black.opacity(0.32), radius: 20, x: 0, y: 12)
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.45), .cyan.opacity(0.30)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: playWidth - 28, height: 5)
+                    .shadow(color: .cyan.opacity(0.25), radius: 5, x: 0, y: 0)
                     .position(x: playWidth / 2, y: ceilingY)
 
-                Rectangle()
-                    .fill(.red.opacity(0.35))
-                    .frame(width: playWidth - 36, height: 3)
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [.red.opacity(0.55), .pink.opacity(0.75), .red.opacity(0.55)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: playWidth - 42, height: 3)
+                    .shadow(color: .red.opacity(0.65), radius: 7, x: 0, y: 0)
                     .position(x: playWidth / 2, y: dangerLineY)
 
-                Path { path in
-                    let points = predictedTrajectoryPoints()
-                    guard let firstPoint = points.first else { return }
+                if isAimerEnabled {
+                    Path { path in
+                        let points = predictedTrajectoryPoints()
+                        guard let firstPoint = points.first else { return }
 
-                    path.move(to: firstPoint)
-                    for point in points.dropFirst() {
-                        path.addLine(to: point)
+                        path.move(to: firstPoint)
+                        for point in points.dropFirst() {
+                            path.addLine(to: point)
+                        }
                     }
+                    .stroke(
+                    LinearGradient(
+                        colors: [.cyan.opacity(0.88), .blue.opacity(0.55)],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    ),
+                    style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [10, 10])
+                )
+                .shadow(color: .cyan.opacity(0.35), radius: 5, x: 0, y: 0)
                 }
-                .stroke(.blue.opacity(0.55), style: StrokeStyle(lineWidth: 5, lineCap: .round, dash: [10, 10]))
 
                 ForEach(stuckOrbs) { orb in
                     OrbView(type: orb.type, size: orbSize)
@@ -523,19 +1011,29 @@ struct ShooterPrototypeView: View {
                     )
                 }
 
-                Capsule()
-                    .fill(.gray.gradient)
-                    .frame(width: 22, height: 64)
+                NextOrbBoardPreviewView(nextType: nextType, orbSize: orbSize)
+                    .position(x: launcherPosition.x - 58, y: launcherY + 2)
+
+                CharacterBacksView(
+                    launcherPosition: launcherPosition,
+                    launcherY: launcherY
+                )
+
+                Image("cannon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 42, height: 110)
+                    .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 6)
                     .rotationEffect(.degrees(aimAngle + 90))
                     .position(launcherPosition)
 
                 if movingOrb == nil && !isGameOver && !isLevelClear {
-                    OrbView(type: currentType, size: orbSize)
-                        .position(launcherPosition)
+                    CurrentShotView(type: currentType, activePowerUp: activePowerUp, size: orbSize)
+                    .position(launcherPosition)
                 }
 
                 if let movingOrb {
-                    OrbView(type: movingOrb.type, size: orbSize)
+                    CurrentShotView(type: movingOrb.type, activePowerUp: movingOrb.powerUp, size: orbSize)
                         .position(movingOrb.position)
                 }
             }
@@ -558,29 +1056,41 @@ struct ShooterPrototypeView: View {
                 updateMovingOrb()
             }
 
-            HStack(spacing: 14) {
-                Button {
-                    showRules = true
-                } label: {
-                    Label("Rules", systemImage: "questionmark.circle")
-                        .font(.headline)
-                }
-                .buttonStyle(.bordered)
-
-                if isLevelClear {
-                    Button {
-                        nextLevel()
-                    } label: {
-                        Label("Next Level", systemImage: "arrow.right.circle.fill")
-                            .font(.headline)
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
+            if !isLevelClear {
+}
 
             Spacer()
         }
         .padding(.top)
+        .overlay {
+                    if isLevelClear {
+                        if isPuzzleMode, let puzzle = puzzleLevel {
+                            PuzzleCompleteOverlayView(
+                                chamberName: puzzle.chamberName,
+                                shotsUsed: puzzleShotsUsed,
+                                parShots: puzzle.parShots,
+                                onBackToMenu: onBackToMenu
+                            )
+                        } else {
+                            LevelCompleteOverlayView(
+                                levelPoints: lastCompletedLevelPoints,
+                                bonusPoints: 100,
+                                totalScore: totalPoints,
+                                onNextLevel: nextLevel,
+                                onBackToMenu: onBackToMenu
+                            )
+                        }
+                    }
+                }
+        .overlay(alignment: .top) {
+            if let unlockedAchievementTitle {
+                AchievementToastView(title: unlockedAchievementTitle)
+                    .padding(.top, 18)
+                    .padding(.horizontal, 24)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(20)
+            }
+        }
         .onAppear {
             gameMode = initialGameMode
             difficulty = initialDifficulty
@@ -590,9 +1100,46 @@ struct ShooterPrototypeView: View {
             RulesSheetView(gameMode: gameMode)
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $showPowerUpPicker) {
+            PowerUpPickerSheetView(
+                bombCount: bombOrbCount,
+                freezeCount: typeFreezeCount,
+                eraseCount: typeEraseCount,
+                activePowerUp: activePowerUp,
+                frozenType: frozenType,
+                frozenShotsRemaining: frozenShotsRemaining,
+                onSelectBomb: {
+                    showPowerUpPicker = false
+                    activatePowerUp(.bomb)
+                },
+                onSelectFreeze: {
+                    showPowerUpPicker = false
+                    if typeFreezeCount > 0 {
+                        showFreezeTypePicker = true
+                    }
+                },
+                onSelectErase: {
+                    showPowerUpPicker = false
+                    activatePowerUp(.typeErase)
+                }
+            )
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showFreezeTypePicker) {
+            FreezeTypePickerSheetView(
+                orbTypes: freezableTypes,
+                onSelectType: { type in
+                    showFreezeTypePicker = false
+                    activateTypeFreeze(type)
+                }
+            )
+            .presentationDetents([.medium])
+        }
     }
 
     private func resetGame() {
+        isPuzzleMode = puzzleLevel != nil
+            puzzleShotsUsed = 0
         movingOrb = nil
         stuckOrbs = []
         fallingOrbs = []
@@ -603,9 +1150,19 @@ struct ShooterPrototypeView: View {
         isLevelClear = false
         aimAngle = -90
         lastStableAimAngle = -90
+        levelPoints = 0
+        lastCompletedLevelPoints = 0
+        activePowerUp = nil
+        frozenType = nil
+        frozenShotsRemaining = 0
         currentType = randomOrbForCurrentMode()
-        loadFreePlayLevel(difficulty)
-    }
+        nextType = randomOrbForCurrentMode()
+        if let puzzle = puzzleLevel {
+                loadPuzzleLevel(puzzle)
+            } else {
+                loadFreePlayLevel(difficulty)
+            }
+        }
 
     private func nextLevel() {
         levelNumber += 1
@@ -619,17 +1176,45 @@ struct ShooterPrototypeView: View {
         isLevelClear = false
         aimAngle = -90
         lastStableAimAngle = -90
+        levelPoints = 0
         currentType = randomOrbForCurrentMode()
-        loadFreePlayLevel(difficulty)
+        nextType = randomOrbForCurrentMode()
+        if let puzzle = puzzleLevel {
+                loadPuzzleLevel(puzzle)
+            } else {
+                loadFreePlayLevel(difficulty)
+            }
+        }
+
+    private var availableSpawnTypes: [OrbType] {
+        let baseTypes: [OrbType]
+
+        switch gameMode {
+        case .classic:
+            baseTypes = OrbType.allCases
+        case .counter:
+            baseTypes = OrbType.allCases.filter { $0 != .normal }
+        }
+
+        if let frozenType, frozenShotsRemaining > 0 {
+            let filtered = baseTypes.filter { $0 != frozenType }
+            return filtered.isEmpty ? baseTypes : filtered
+        }
+
+        return baseTypes
+    }
+
+    private var freezableTypes: [OrbType] {
+        switch gameMode {
+        case .classic:
+            return OrbType.allCases
+        case .counter:
+            return OrbType.allCases.filter { $0 != .normal }
+        }
     }
 
     private func randomOrbForCurrentMode() -> OrbType {
-        switch gameMode {
-        case .classic:
-            return OrbType.allCases.randomElement()!
-        case .counter:
-            return OrbType.allCases.filter { $0 != .normal }.randomElement()!
-        }
+        availableSpawnTypes.randomElement()!
     }
 
     private func orbForLevel(_ type: OrbType) -> OrbType {
@@ -662,6 +1247,34 @@ struct ShooterPrototypeView: View {
 
                 stuckOrbs.append(StuckOrb(type: orbForLevel(type), position: position))
             }
+        }
+    }
+    private func loadPuzzleLevel(_ puzzle: PuzzleLevel) {
+        let rowSpacing = orbSize * 0.82
+        let colSpacing = orbSize * 0.92
+        let maxColumnCount = 8
+        let fullRowWidth = orbSize + CGFloat(maxColumnCount - 1) * colSpacing
+        let startY = ceilingY + orbSize / 2
+        let fullRowStartX = (playWidth - fullRowWidth) / 2 + orbSize / 2
+
+        for (rowIndex, row) in puzzle.grid.enumerated() {
+            let rowOffset: CGFloat = rowIndex.isMultiple(of: 2) ? 0 : colSpacing / 2
+            for (colIndex, type) in row.enumerated() {
+                guard let type = type else { continue }
+                let position = CGPoint(
+                    x: fullRowStartX + rowOffset + CGFloat(colIndex) * colSpacing,
+                    y: startY + CGFloat(rowIndex) * rowSpacing
+                )
+                stuckOrbs.append(StuckOrb(type: type, position: position))
+            }
+        }
+
+        // Load the shot queue
+        if let firstShot = puzzle.shotQueue.first {
+            currentType = firstShot
+        }
+        if puzzle.shotQueue.count > 1 {
+            nextType = puzzle.shotQueue[1]
         }
     }
 
@@ -738,6 +1351,8 @@ struct ShooterPrototypeView: View {
     private func shoot() {
         guard movingOrb == nil && !isGameOver && !isLevelClear else { return }
 
+        SoundManager.shared.play("orb_launch")
+
         aimAngle = lastStableAimAngle
 
         let radians = aimAngle * .pi / 180
@@ -749,7 +1364,8 @@ struct ShooterPrototypeView: View {
         movingOrb = MovingOrb(
             type: currentType,
             position: launcherPosition,
-            velocity: velocity
+            velocity: velocity,
+            powerUp: activePowerUp
         )
     }
 
@@ -788,20 +1404,62 @@ struct ShooterPrototypeView: View {
     }
 
     private func placeOrb(type: OrbType, at position: CGPoint) {
+        let placedPowerUp = movingOrb?.powerUp ?? activePowerUp
         let newOrb = StuckOrb(type: type, position: position)
         stuckOrbs.append(newOrb)
         movingOrb = nil
 
-        let dominanceCount = clearWeakerNeighbors(around: newOrb)
-        let matchCount = gameMode == .classic ? clearMatchingGroup(connectedTo: newOrb) : 0
-        let droppedCount = dropFloatingOrbs()
-        let totalCleared = dominanceCount + matchCount + droppedCount
+        var totalCleared = 0
+        var droppedCount = 0
+
+        if placedPowerUp == .bomb {
+            totalCleared += applyBombPowerUp(at: newOrb)
+            activePowerUp = nil
+        } else if placedPowerUp == .typeErase {
+            let targetType = nearestExistingOrbType(to: position, excluding: newOrb.id) ?? newOrb.type
+            totalCleared += applyTypeErasePowerUp(targetType: targetType)
+            activePowerUp = nil
+        } else {
+            let dominanceCount = clearWeakerNeighbors(around: newOrb)
+            let matchCount = gameMode == .classic ? clearMatchingGroup(connectedTo: newOrb) : 0
+            droppedCount = dropFloatingOrbs()
+            totalCleared = dominanceCount + matchCount + droppedCount
+        }
+
+        if activePowerUp == nil {
+            // no-op, keeps the one-shot power-up logic explicit
+        }
+
+        if frozenShotsRemaining > 0 {
+            frozenShotsRemaining -= 1
+            if frozenShotsRemaining == 0 {
+                frozenType = nil
+            }
+        }
+
+        if totalCleared > 0 {
+            SoundManager.shared.play("orb_clear")
+
+            if droppedCount >= 3 {
+                SoundManager.shared.play("big_drop_cheer", delay: 0.65)
+            }
+
+            let pointsEarned = totalCleared * 10
+            totalPoints += pointsEarned
+            levelPoints += pointsEarned
+            showAchievementUnlocks(
+                AchievementManager.shared.recordScore(totalPoints: totalPoints)
+            )
+        }
 
         if droppedCount > 0 {
+            showAchievementUnlocks(
+                AchievementManager.shared.recordDrop(count: droppedCount, mode: gameMode)
+            )
             missCount = 0
-        } else if totalCleared > 0 {
-            // A clear prevents the danger meter from increasing,
-            // but only dropping disconnected orbs empties the meter.
+        } else if totalCleared > 0 && !(gameMode == .counter && difficulty == .hard) {
+            // Classic and easier Counter clears prevent danger from increasing.
+            // Counter Hard is stricter: only dropping disconnected orbs protects you.
         } else {
             missCount += 1
             if missCount >= difficulty.missesBeforeDrop {
@@ -814,8 +1472,105 @@ struct ShooterPrototypeView: View {
         checkGameOver()
 
         if !isLevelClear && !isGameOver {
+                if isPuzzleMode, let puzzle = puzzleLevel {
+                    puzzleShotsUsed += 1
+                    let nextIndex = puzzleShotsUsed + 1
+                    currentType = nextIndex < puzzle.shotQueue.count ? puzzle.shotQueue[puzzleShotsUsed] : nextType
+                    nextType = nextIndex + 1 < puzzle.shotQueue.count ? puzzle.shotQueue[nextIndex] : randomOrbForCurrentMode()
+                } else {
+                    currentType = nextType
+                    nextType = randomOrbForCurrentMode()
+                }
+            }
+    }
+
+    private func activatePowerUp(_ powerUp: ActivePowerUp) {
+        guard movingOrb == nil && !isGameOver && !isLevelClear else { return }
+
+        switch powerUp {
+        case .bomb:
+            guard bombOrbCount > 0 else { return }
+            bombOrbCount -= 1
+            activePowerUp = .bomb
+
+        case .typeFreeze:
+            guard typeFreezeCount > 0 else { return }
+            showFreezeTypePicker = true
+
+        case .typeErase:
+            guard typeEraseCount > 0 else { return }
+            typeEraseCount -= 1
+            activePowerUp = .typeErase
+        }
+    }
+
+    private func activateTypeFreeze(_ type: OrbType) {
+        guard typeFreezeCount > 0 else { return }
+        typeFreezeCount -= 1
+        frozenType = type
+        frozenShotsRemaining = 10
+
+        if currentType == type {
             currentType = randomOrbForCurrentMode()
         }
+
+        if nextType == type {
+            nextType = randomOrbForCurrentMode()
+        }
+    }
+
+    private func applyBombPowerUp(at newOrb: StuckOrb) -> Int {
+        let blastRadius = orbSize * 3.0
+        let orbsToRemove = stuckOrbs.filter { orb in
+            distance(from: orb.position, to: newOrb.position) <= blastRadius
+        }
+
+        guard !orbsToRemove.isEmpty else { return 0 }
+
+        animateClearEffects(orbsToRemove, style: .breakApart)
+        let idsToRemove = Set(orbsToRemove.map { $0.id })
+        stuckOrbs.removeAll { idsToRemove.contains($0.id) }
+
+        let droppedCount = dropFloatingOrbs()
+        if droppedCount > 0 {
+            showAchievementUnlocks(
+                AchievementManager.shared.recordDrop(count: droppedCount, mode: gameMode)
+            )
+        }
+        if droppedCount >= 3 {
+            SoundManager.shared.play("big_drop_cheer", delay: 0.65)
+        }
+        return orbsToRemove.count + droppedCount
+    }
+
+    private func applyTypeErasePowerUp(targetType: OrbType) -> Int {
+        let orbsToRemove = stuckOrbs.filter { $0.type == targetType }
+
+        guard !orbsToRemove.isEmpty else { return 0 }
+
+        animateClearEffects(orbsToRemove, style: .breakApart)
+        let idsToRemove = Set(orbsToRemove.map { $0.id })
+        stuckOrbs.removeAll { idsToRemove.contains($0.id) }
+
+        let droppedCount = dropFloatingOrbs()
+        if droppedCount > 0 {
+            showAchievementUnlocks(
+                AchievementManager.shared.recordDrop(count: droppedCount, mode: gameMode)
+            )
+        }
+        if droppedCount >= 3 {
+            SoundManager.shared.play("big_drop_cheer", delay: 0.65)
+        }
+        return orbsToRemove.count + droppedCount
+    }
+
+    private func nearestExistingOrbType(to position: CGPoint, excluding newOrbID: UUID) -> OrbType? {
+        stuckOrbs
+            .filter { $0.id != newOrbID }
+            .min { lhs, rhs in
+                distance(from: lhs.position, to: position) < distance(from: rhs.position, to: position)
+            }?
+            .type
     }
 
     private func moveBoardDown() {
@@ -829,9 +1584,22 @@ struct ShooterPrototypeView: View {
     }
 
     private func checkLevelClear() {
-        if stuckOrbs.isEmpty {
+        if stuckOrbs.isEmpty && !isLevelClear {
+            SoundManager.shared.play("level_complete")
+            showAchievementUnlocks(
+                AchievementManager.shared.recordLevelComplete(
+                    difficulty: difficulty,
+                    isAimerEnabled: isAimerEnabled
+                )
+            )
+
             isLevelClear = true
             movingOrb = nil
+            lastCompletedLevelPoints = levelPoints
+            totalPoints += 100
+            showAchievementUnlocks(
+                AchievementManager.shared.recordScore(totalPoints: totalPoints)
+            )
         }
     }
 
@@ -872,6 +1640,16 @@ struct ShooterPrototypeView: View {
     }
 
     private func dropFloatingOrbs() -> Int {
+            // If 12 or fewer orbs remain they are likely all floating — skip BFS and drop all
+            if stuckOrbs.count <= 25 {
+                let floatingOrbs = stuckOrbs
+                animateFallingOrbs(floatingOrbs)
+                let count = stuckOrbs.count
+                stuckOrbs.removeAll()
+                return count
+            }
+
+
         let ceilingOrbs = stuckOrbs.filter { $0.position.y <= ceilingY + orbSize * 0.75 }
         guard !ceilingOrbs.isEmpty else {
             let floatingOrbs = stuckOrbs
@@ -907,28 +1685,29 @@ struct ShooterPrototypeView: View {
     }
 
     private func animateFallingOrbs(_ orbs: [StuckOrb]) {
-        let falling = orbs.map { FallingOrb(type: $0.type, startPosition: $0.position) }
-        fallingOrbs.append(contentsOf: falling)
+        let visibleOrbs = orbs.count > 12 ? Array(orbs.prefix(12)) : orbs
+        let falling = visibleOrbs.map { FallingOrb(type: $0.type, startPosition: $0.position) }
 
-        Task {
-            try? await Task.sleep(for: .milliseconds(650))
-            await MainActor.run {
-                let fallingIDs = Set(falling.map { $0.id })
-                fallingOrbs.removeAll { fallingIDs.contains($0.id) }
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.fallingOrbs.append(contentsOf: falling)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            let fallingIDs = Set(falling.map { $0.id })
+            self.fallingOrbs.removeAll { fallingIDs.contains($0.id) }
         }
     }
 
     private func animateClearEffects(_ orbs: [StuckOrb], style: ClearEffect.Style) {
         let effects = orbs.map { ClearEffect(type: $0.type, position: $0.position, style: style) }
-        clearEffects.append(contentsOf: effects)
 
-        Task {
-            try? await Task.sleep(for: .milliseconds(520))
-            await MainActor.run {
-                let effectIDs = Set(effects.map { $0.id })
-                clearEffects.removeAll { effectIDs.contains($0.id) }
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.clearEffects.append(contentsOf: effects)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.57) {
+            let effectIDs = Set(effects.map { $0.id })
+            self.clearEffects.removeAll { effectIDs.contains($0.id) }
         }
     }
 
@@ -940,6 +1719,14 @@ struct ShooterPrototypeView: View {
 
         let idsToRemove = Set(group.map { $0.id })
         let removedOrbs = stuckOrbs.filter { idsToRemove.contains($0.id) }
+
+        let normalMatchCount = removedOrbs.filter { $0.type == .normal }.count
+        if normalMatchCount > 0 {
+            showAchievementUnlocks(
+                AchievementManager.shared.recordNormalMatch(count: normalMatchCount)
+            )
+        }
+
         animateClearEffects(removedOrbs, style: .breakApart)
         stuckOrbs.removeAll { idsToRemove.contains($0.id) }
         return group.count
@@ -1020,6 +1807,29 @@ struct ShooterPrototypeView: View {
         return slots
     }
 
+    private func showAchievementUnlocks(_ titles: [String]) {
+        guard let title = titles.first else { return }
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            unlockedAchievementTitle = title
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                if unlockedAchievementTitle == title {
+                    unlockedAchievementTitle = nil
+                }
+            }
+
+            let remainingTitles = Array(titles.dropFirst())
+            if !remainingTitles.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    showAchievementUnlocks(remainingTitles)
+                }
+            }
+        }
+    }
+
     private func preventVisualOverlap(for startingPosition: CGPoint) -> CGPoint {
         var position = startingPosition
         let minimumDistance = orbSize * 0.98
@@ -1042,6 +1852,806 @@ struct ShooterPrototypeView: View {
     }
 }
 
+
+struct AchievementToastView: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.title3.bold())
+                .foregroundStyle(.green)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Achievement Unlocked")
+                    .font(.caption.bold())
+                    .foregroundStyle(.cyan.opacity(0.9))
+
+                Text(title)
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.black.opacity(0.78))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(.green.opacity(0.25), lineWidth: 1)
+                }
+        )
+        .shadow(color: .black.opacity(0.32), radius: 14, x: 0, y: 8)
+    }
+}
+
+struct LevelCompleteOverlayView: View {
+    let levelPoints: Int
+    let bonusPoints: Int
+    let totalScore: Int
+    let onNextLevel: () -> Void
+    let onBackToMenu: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                VStack(spacing: 6) {
+                    Text("LEVEL COMPLETE")
+                        .font(.system(size: 30, weight: .black, design: .rounded))
+                        .tracking(2)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.white, .cyan.opacity(0.95)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+
+                    Text("Elemental Energy Collected")
+                        .font(.headline)
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+
+                VStack(spacing: 10) {
+                    ScoreRow(label: "Level Points", value: levelPoints)
+                    ScoreRow(label: "Level Bonus", value: bonusPoints)
+
+                    Rectangle()
+                        .fill(.white.opacity(0.18))
+                        .frame(height: 1)
+                        .padding(.vertical, 4)
+
+                    ScoreRow(label: "Level Total", value: levelPoints + bonusPoints, isTotal: true)
+
+                    Rectangle()
+                        .fill(.white.opacity(0.12))
+                        .frame(height: 1)
+                        .padding(.vertical, 2)
+
+                    ScoreRow(label: "Total Game Points", value: totalScore, isGameTotal: true)
+                }
+                .padding(18)
+                .background(
+                    RoundedRectangle(cornerRadius: 22)
+                        .fill(.black.opacity(0.42))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 22)
+                                .stroke(.cyan.opacity(0.22), lineWidth: 1)
+                        }
+                )
+
+                HStack(spacing: 12) {
+                    Button(action: onBackToMenu) {
+                        Label("Menu", systemImage: "house.fill")
+                            .font(.headline.bold())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .foregroundStyle(.white.opacity(0.92))
+                            .background(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .fill(.white.opacity(0.12))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 18)
+                                            .stroke(.white.opacity(0.16), lineWidth: 1)
+                                    }
+                            )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onNextLevel) {
+                        Label("Next Level", systemImage: "arrow.right.circle.fill")
+                            .font(.headline.bold())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .foregroundStyle(.white)
+                            .background(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [.cyan.opacity(0.92), .blue.opacity(0.82)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .shadow(color: .cyan.opacity(0.28), radius: 12, x: 0, y: 6)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(22)
+            .background(
+                RoundedRectangle(cornerRadius: 30)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.07, green: 0.08, blue: 0.16).opacity(0.96),
+                                Color(red: 0.13, green: 0.15, blue: 0.30).opacity(0.96),
+                                Color(red: 0.09, green: 0.08, blue: 0.12).opacity(0.96)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 30)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [.cyan.opacity(0.45), .orange.opacity(0.25), .white.opacity(0.12)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.4
+                            )
+                    }
+                    .shadow(color: .black.opacity(0.45), radius: 28, x: 0, y: 14)
+            )
+            .padding(.horizontal, 24)
+        }
+    }
+}
+
+struct ScoreRow: View {
+    let label: String
+    let value: Int
+    var isTotal: Bool = false
+    var isGameTotal: Bool = false
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .font((isTotal || isGameTotal) ? .headline.bold() : .headline)
+                .foregroundStyle(.white.opacity(isTotal ? 0.95 : (isGameTotal ? 0.78 : 0.82)))
+
+            Spacer()
+
+            Text("\(value)")
+                .font(isTotal ? .title3.bold() : .headline.bold())
+                .foregroundStyle(isTotal ? .green : (isGameTotal ? .cyan.opacity(0.92) : .white))
+        }
+    }
+}
+
+
+
+
+
+
+struct FreezeTypeButton: View {
+    let type: OrbType
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                OrbView(type: type, size: 48)
+
+                Text(type.displayName)
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(cardBackground)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 20)
+            .fill(.white.opacity(0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(.cyan.opacity(0.30), lineWidth: 1)
+            )
+    }
+}
+
+struct FreezeTypePickerSheetView: View {
+    let orbTypes: [OrbType]
+    let onSelectType: (OrbType) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = [
+        GridItem(.flexible()),
+        GridItem(.flexible()),
+        GridItem(.flexible())
+    ]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            OrbBackgroundView(floatAmount: -6)
+                .opacity(0.22)
+
+            VStack(spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Type Freeze")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+
+                        Text("Choose one type to block for 10 throws.")
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                LazyVGrid(columns: columns, spacing: 14) {
+                    ForEach(Array(orbTypes.enumerated()), id: \.offset) { item in
+                        FreezeTypeButton(type: item.element) {
+                            onSelectType(item.element)
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+
+                Text("Frozen types will not appear as the current or next orb while the freeze is active.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.48))
+                    .padding(.horizontal, 30)
+
+                Spacer()
+            }
+        }
+    }
+}
+
+
+struct PowerUpPickerSheetView: View {
+    let bombCount: Int
+    let freezeCount: Int
+    let eraseCount: Int
+    let activePowerUp: ActivePowerUp?
+    let frozenType: OrbType?
+    let frozenShotsRemaining: Int
+    let onSelectBomb: () -> Void
+    let onSelectFreeze: () -> Void
+    let onSelectErase: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Powerups")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+
+                        Text("Choose one to load for your next shot.")
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                if let activePowerUp {
+                    Text("\(activePowerUp.title) is loaded for the next shot.")
+                        .font(.headline.bold())
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 24)
+                } else if let frozenType, frozenShotsRemaining > 0 {
+                    Text("\(frozenType.symbol) is frozen for \(frozenShotsRemaining) throws.")
+                        .font(.headline.bold())
+                        .foregroundStyle(.cyan)
+                        .padding(.horizontal, 24)
+                }
+
+                VStack(spacing: 14) {
+                    PowerUpPickerCardView(
+                        title: "Bomb Orb",
+                        subtitle: "Loads a bomb shot that clears a 3-orb radius.",
+                        symbol: "burst.fill",
+                        count: bombCount,
+                        color: .red,
+                        action: onSelectBomb
+                    )
+
+                    PowerUpPickerCardView(
+                        title: "Type Freeze",
+                        subtitle: "Choose one type to block from spawning for 10 throws.",
+                        symbol: "snowflake",
+                        count: freezeCount,
+                        color: .cyan,
+                        action: onSelectFreeze
+                    )
+
+                    PowerUpPickerCardView(
+                        title: "Type Erase",
+                        subtitle: "Loads a shot that erases every orb matching the type you hit.",
+                        symbol: "wand.and.stars",
+                        count: eraseCount,
+                        color: .purple,
+                        action: onSelectErase
+                    )
+                }
+                .padding(.horizontal, 24)
+
+                Spacer()
+            }
+        }
+    }
+}
+
+struct PowerUpPickerCardView: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let count: Int
+    let color: Color
+    let action: () -> Void
+
+    private var isAvailable: Bool {
+        count > 0
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack(alignment: .topTrailing) {
+                    Circle()
+                        .fill(color.opacity(isAvailable ? 0.9 : 0.28))
+                        .frame(width: 56, height: 56)
+
+                    Image(systemName: symbol)
+                        .font(.title2.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 56, height: 56)
+
+                    Text("\(count)")
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(.black.opacity(0.72)))
+                        .offset(x: 8, y: -6)
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title)
+                        .font(.headline.bold())
+                        .foregroundStyle(.white.opacity(isAvailable ? 1 : 0.45))
+
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(isAvailable ? 0.68 : 0.34))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer()
+
+                Image(systemName: "chevron.right")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white.opacity(isAvailable ? 0.65 : 0.20))
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(.white.opacity(isAvailable ? 0.10 : 0.05))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 22)
+                            .stroke(.white.opacity(isAvailable ? 0.14 : 0.07), lineWidth: 1)
+                    }
+            )
+        }
+        .disabled(!isAvailable)
+        .buttonStyle(.plain)
+    }
+}
+
+struct CurrentShotView: View {
+    let type: OrbType
+    let activePowerUp: ActivePowerUp?
+    let size: CGFloat
+
+    var body: some View {
+        if let activePowerUp {
+            PowerUpShotOrbView(powerUp: activePowerUp, size: size)
+        } else {
+            OrbView(type: type, size: size)
+        }
+    }
+}
+
+struct PowerUpShotOrbView: View {
+    let powerUp: ActivePowerUp
+    let size: CGFloat
+
+    var body: some View {
+        Image(powerUp.assetName)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
+    }
+}
+
+struct GameTopHUDView: View {
+    let modeTitle: String
+    let levelNumber: Int
+    let difficulty: Difficulty
+    let score: Int
+    let nextType: OrbType
+    let activePowerUp: ActivePowerUp?
+    let frozenType: OrbType?
+    let frozenShotsRemaining: Int
+    let currentMisses: Int
+    let maxMisses: Int
+    let onBack: () -> Void
+    let onRules: () -> Void
+    let onPowerUp: () -> Void
+
+    private var dangerRatio: CGFloat {
+        guard maxMisses > 0 else { return 0 }
+        return min(1, max(0, CGFloat(currentMisses) / CGFloat(maxMisses)))
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(.title3.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(.black.opacity(0.58)))
+                        .overlay {
+                            Circle().stroke(.white.opacity(0.18), lineWidth: 1)
+                        }
+                }
+
+                HStack(spacing: 8) {
+                    HUDLevelDifficultyCardView(
+                        levelNumber: levelNumber,
+                        difficulty: difficulty
+                    )
+
+                    HUDCardView(
+                        label: "SCORE",
+                        value: "\(score)"
+                    )
+
+                    HUDPowerUpCardView(
+                        activePowerUp: activePowerUp,
+                        frozenType: frozenType,
+                        frozenShotsRemaining: frozenShotsRemaining,
+                        action: onPowerUp
+                    )
+                }
+
+                Button(action: onRules) {
+                    Image(systemName: "questionmark")
+                        .font(.title3.bold())
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(Circle().fill(.black.opacity(0.72)))
+                        .overlay {
+                            Circle().stroke(.white.opacity(0.18), lineWidth: 1)
+                        }
+                }
+            }
+
+            DangerMeterView(
+                currentMisses: currentMisses,
+                maxMisses: maxMisses
+            )
+            .frame(height: 34)
+            .overlay(alignment: .leading) {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("DANGER")
+                        .font(.caption.bold())
+                }
+                .foregroundStyle(dangerRatio >= 0.75 ? .red : .orange)
+                .padding(.leading, 12)
+                .animation(.easeInOut(duration: 0.25), value: dangerRatio)
+            }
+        }
+    }
+}
+
+struct HUDLevelDifficultyCardView: View {
+    let levelNumber: Int
+    let difficulty: Difficulty
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text("LEVEL")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.cyan.opacity(0.85))
+
+            Text("\(levelNumber)")
+                .font(.system(size: 18, weight: .black, design: .rounded))
+                .foregroundStyle(.white)
+
+            Text(difficulty.displayName.uppercased())
+                .font(.system(size: 8, weight: .black, design: .rounded))
+                .foregroundStyle(difficulty == .hard ? .orange : .white.opacity(0.68))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+        .background(HUDPanelBackground(isActive: false))
+    }
+}
+
+struct HUDCardView: View {
+    let label: String
+    let value: String
+    var valueColor: Color = .white
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.cyan.opacity(0.85))
+
+            Text(value)
+                .font(.system(size: 19, weight: .black, design: .rounded))
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 58)
+        .background(HUDPanelBackground(isActive: false))
+    }
+}
+
+struct HUDPanelBackground: View {
+    let isActive: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .fill(isActive ? .orange.opacity(0.50) : .black.opacity(0.58))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isActive ? .orange.opacity(0.78) : .white.opacity(0.15), lineWidth: 1)
+            }
+    }
+}
+
+struct HUDNextOrbCardView: View {
+    let nextType: OrbType
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text("NEXT")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(.cyan.opacity(0.85))
+
+            OrbView(type: nextType, size: 23)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.black.opacity(0.58))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(.white.opacity(0.15), lineWidth: 1)
+                }
+        )
+    }
+}
+
+
+struct HUDPowerUpCardView: View {
+    let activePowerUp: ActivePowerUp?
+    let frozenType: OrbType?
+    let frozenShotsRemaining: Int
+    let action: () -> Void
+
+    private var isActive: Bool {
+        activePowerUp != nil || frozenShotsRemaining > 0
+    }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Text("POWER")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(.cyan.opacity(0.85))
+
+                if let activePowerUp {
+                    Image(activePowerUp.assetName)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 28, height: 28)
+                } else if let frozenType, frozenShotsRemaining > 0 {
+                    OrbView(type: frozenType, size: 26)
+                } else {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 19, weight: .bold))
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
+            .background(HUDPanelBackground(isActive: isActive))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct NextOrbBoardPreviewView: View {
+    let nextType: OrbType
+    let orbSize: CGFloat
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text("NEXT")
+                .font(.system(size: 9, weight: .black, design: .rounded))
+                .foregroundStyle(.white.opacity(0.86))
+                .tracking(1)
+
+            OrbView(type: nextType, size: orbSize * 0.92)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.black.opacity(0.46))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(.white.opacity(0.16), lineWidth: 1)
+                }
+        )
+        .shadow(color: .black.opacity(0.28), radius: 7, x: 0, y: 4)
+        .allowsHitTesting(false)
+    }
+}
+
+struct MountainRangeView: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.05, y: rect.maxY * 0.70))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.16, y: rect.maxY * 0.26))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.28, y: rect.maxY * 0.72))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.38, y: rect.maxY * 0.42))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.50, y: rect.maxY * 0.80))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.64, y: rect.maxY * 0.34))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.78, y: rect.maxY * 0.74))
+        path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.92, y: rect.maxY * 0.38))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY * 0.68))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct TitanGroundView: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.45, green: 0.21, blue: 0.10),
+                    Color(red: 0.25, green: 0.13, blue: 0.08),
+                    Color(red: 0.08, green: 0.07, blue: 0.07)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            ForEach(0..<18, id: \.self) { index in
+                let x = CGFloat((index * 47) % 320)
+                let y = CGFloat(14 + (index * 31) % 150)
+                Capsule()
+                    .fill(.black.opacity(index.isMultiple(of: 2) ? 0.24 : 0.15))
+                    .frame(width: CGFloat(18 + (index % 5) * 7), height: CGFloat(6 + (index % 3) * 3))
+                    .rotationEffect(.degrees(Double(index * 19)))
+                    .position(x: x, y: y)
+            }
+        }
+        .clipShape(Rectangle())
+    }
+}
+
+struct CharacterBacksView: View {
+    let launcherPosition: CGPoint
+    let launcherY: CGFloat
+
+    var body: some View {
+        ZStack {
+            Image("herbback")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 44)
+                .position(x: launcherPosition.x + 58, y: launcherY - 2)
+
+            Image("dottyback")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 36)
+                .position(x: launcherPosition.x + 96, y: launcherY + 2)
+        }
+        .opacity(0.92)
+        .shadow(color: .black.opacity(0.25), radius: 6, x: 0, y: 4)
+        .allowsHitTesting(false)
+    }
+}
+
 struct DangerMeterView: View {
     let currentMisses: Int
     let maxMisses: Int
@@ -1054,12 +2664,31 @@ struct DangerMeterView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(.gray.opacity(0.18))
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(.black.opacity(0.58))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(fillRatio >= 0.75 ? .red.opacity(0.55) : .white.opacity(0.14), lineWidth: 1)
+                    }
 
                 Capsule()
-                    .fill(fillRatio >= 0.75 ? .red.opacity(0.75) : .orange.opacity(0.7))
-                    .frame(width: geometry.size.width * fillRatio)
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 12)
+                    .padding(.horizontal, 92)
+
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: fillRatio >= 0.75
+                                ? [.orange.opacity(0.90), .red.opacity(0.95)]
+                                : [.cyan.opacity(0.90), .green.opacity(0.75), .orange.opacity(0.75)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(0, (geometry.size.width - 104) * fillRatio), height: 12)
+                    .padding(.leading, 92)
+                    .shadow(color: fillRatio >= 0.75 ? .red.opacity(0.55) : .cyan.opacity(0.35), radius: 8, x: 0, y: 0)
                     .animation(.spring(response: 0.28, dampingFraction: 0.8), value: fillRatio)
             }
         }
@@ -1072,49 +2701,136 @@ struct RulesSheetView: View {
     let gameMode: GameMode
     @Environment(\.dismiss) private var dismiss
 
+    private var title: String {
+        gameMode == .classic ? "Classic Rules" : "Counter Rules"
+    }
+
+    private var subtitle: String {
+        gameMode == .classic
+        ? "Match orbs and use Water to clear Fire."
+        : "No match clears. Stronger types remove weaker types."
+    }
+
+    private var rules: [(String, String)] {
+        if gameMode == .classic {
+            return [
+                ("1", "Match 3 or more touching orbs of the same type to clear them."),
+                ("2", "Water has a special advantage: 💧 Water clears 🔥 Fire when launched next to it."),
+                ("3", "Other orb types act like regular matching orbs."),
+                ("4", "Orbs not connected to the ceiling fall away."),
+                ("5", "The danger meter fills when you miss. Drop floating orbs to empty it.")
+            ]
+        } else {
+            return [
+                ("1", "Match-3 clearing is turned off."),
+                ("2", "Clear orbs by launching a stronger type next to a weaker type."),
+                ("💧", "Water beats 🔥 Fire and 🪨 Rock."),
+                ("🔥", "Fire beats 🌱 Plant."),
+                ("🌱", "Plant beats 💧 Water."),
+                ("⚡️", "Electric beats 💧 Water."),
+                ("🪨", "Rock beats ⚡️ Electric."),
+                ("⚪️", "Normal does not appear in Counter Mode."),
+                ("9", "Orbs not connected to the ceiling fall away.")
+            ]
+        }
+    }
+
     var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 18) {
-                Text(gameMode == .classic ? "Classic Rules" : "Counter Mode Rules")
-                    .font(.largeTitle.bold())
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
-                if gameMode == .classic {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("• Match 3 or more touching orbs of the same type to clear them.")
-                        Text("• 💧 Water clears 🔥 Fire when launched next to it.")
-                        Text("• Other orb types act like regular matching orbs.")
-                        Text("• Orbs not connected to the ceiling fall away.")
-                    }
-                    .font(.body)
-                } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("• Match-3 clearing is off.")
-                        Text("• Clear orbs by launching a stronger type next to a weaker type.")
-                        Text("• 💧 Water beats 🔥 Fire and 🪨 Boulder")
-                        Text("• 🔥 Fire beats 🌱 Plant")
-                        Text("• 🌱 Plant beats 💧 Water")
-                        Text("• ⚡️ Electric beats 💧 Water")
-                        Text("• 🪨 Boulder beats ⚡️ Electric")
-                        Text("• ⚪️ Normal does not appear in Counter Mode.")
-                        Text("• Orbs not connected to the ceiling fall away.")
-                    }
-                    .font(.body)
-                }
+            OrbBackgroundView(floatAmount: -6)
+                .opacity(0.18)
 
-                Spacer()
-            }
-            .padding(24)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+            VStack(spacing: 16) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title)
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.white, .cyan.opacity(0.9)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+
+                        Text(subtitle)
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.68))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer()
+
                     Button {
                         dismiss()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.82))
                     }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                ScrollView {
+                    VStack(spacing: 12) {
+                        ForEach(Array(rules.enumerated()), id: \.offset) { _, item in
+                            RuleCardView(badge: item.0, text: item.1, accent: gameMode == .classic ? .cyan : .orange)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 26)
                 }
             }
         }
+    }
+}
+
+struct RuleCardView: View {
+    let badge: String
+    let text: String
+    let accent: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(0.24))
+                    .frame(width: 34, height: 34)
+
+                Text(badge)
+                    .font(.caption.bold())
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.65)
+            }
+
+            Text(text)
+                .font(.body)
+                .foregroundStyle(.white.opacity(0.84))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(.white.opacity(0.09))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18)
+                        .stroke(.white.opacity(0.12), lineWidth: 1)
+                }
+        )
     }
 }
 
@@ -1199,19 +2915,21 @@ struct FallingOrbView: View {
 
 struct OrbView: View {
     let type: OrbType
+    
+    
     let size: CGFloat
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(type.color.gradient)
-                .frame(width: size, height: size)
-                .shadow(radius: 3)
-
-            Text(type.symbol)
-                .font(.system(size: size * 0.48))
-        }
+        Image(type.assetName)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
     }
+}
+struct SelectedGame {
+    let mode: GameMode
+    let difficulty: Difficulty
+    let isAimerEnabled: Bool
 }
 
 #Preview {
