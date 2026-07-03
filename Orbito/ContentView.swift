@@ -1640,14 +1640,7 @@ struct ShooterPrototypeView: View {
     }
 
     private func dropFloatingOrbs() -> Int {
-            // If 12 or fewer orbs remain they are likely all floating — skip BFS and drop all
-            if stuckOrbs.count <= 25 {
-                let floatingOrbs = stuckOrbs
-                animateFallingOrbs(floatingOrbs)
-                let count = stuckOrbs.count
-                stuckOrbs.removeAll()
-                return count
-            }
+            
 
 
         let ceilingOrbs = stuckOrbs.filter { $0.position.y <= ceilingY + orbSize * 0.75 }
