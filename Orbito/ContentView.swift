@@ -860,7 +860,7 @@ struct ShooterPrototypeView: View {
         let colSpacing = orbSize * 0.92
         return orbSize + CGFloat(difficulty.columnCount - 1) * colSpacing
     }
-    private let playHeight: CGFloat = 610
+    private let playHeight: CGFloat = UIScreen.main.bounds.height - 200
     private let orbSize: CGFloat = 34
     private let launcherY: CGFloat = 560
     private let shotSpeed: CGFloat = 8
