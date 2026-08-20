@@ -1,8 +1,9 @@
 import SwiftUI
+import GameKit
 
 struct MainMenuView: View {
     let onSelectMode: (GameMode, Difficulty, Bool) -> Void
-    var onSelectPuzzle: ((PuzzleLevel) -> Void)? = nil
+    var onSelectPuzzle: ((PuzzleLevel?) -> Void)? = nil
 
     @State private var showHowToPlay = false
     @State private var showStore = false
@@ -12,6 +13,7 @@ struct MainMenuView: View {
     @State private var showAchievements = false
     @State private var unlockedAchievementTitle: String?
     @State private var showPuzzleMode = false
+    @State private var showLeaderboard = false
 
     @AppStorage("totalPoints") private var totalPoints: Int = 0
     @AppStorage("bombOrbCount") private var bombOrbCount: Int = 0
@@ -103,13 +105,16 @@ struct MainMenuView: View {
                         }
                     }
 
-                    #if DEBUG
                     HStack(spacing: 10) {
-                        MenuSmallButton(title: "Puzzle Mode", symbol: "puzzlepiece.fill", compact: true, style: .highlight) {
-                            showPuzzleMode = true
+                        MenuSmallButton(title: "Leaderboard", symbol: "list.number", compact: true, style: .highlight) {
+                            showLeaderboard = true
                         }
+
+                        MenuSmallButton(title: "Puzzle Mode\n(Coming Soon)", symbol: "puzzlepiece.fill", compact: true, style: .highlight) {
+                        }
+                        .opacity(0.45)
+                        .allowsHitTesting(false)
                     }
-                    #endif
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 45)
@@ -143,6 +148,9 @@ struct MainMenuView: View {
         .sheet(isPresented: $showAchievements) {
             AchievementsView()
         }
+        .sheet(isPresented: $showLeaderboard) {
+            LeaderboardView()
+        }
         .sheet(item: $selectedModeForDifficulty) { mode in
             DifficultySelectionView(
                 mode: mode,
@@ -152,16 +160,9 @@ struct MainMenuView: View {
                 onSelectMode(mode, difficulty, isAimerEnabled)
             }
         }
-#if DEBUG
-.sheet(isPresented: $showPuzzleMode) {
-    NavigationStack {
-        PuzzleLevelSelectView { puzzle in
-            showPuzzleMode = false
-            onSelectPuzzle?(puzzle)
+        .onAppear {
+            GameCenterManager.shared.authenticate()
         }
-    }
-}
-#endif
     }
 }
 
@@ -553,7 +554,7 @@ struct StoreView: View {
 struct StoreItemCardView: View {
     let title: String
     let subtitle: String
-    let symbol: String   // now this is the IMAGE NAME
+    let symbol: String
     let color: Color
     let cost: Int
     let ownedCount: Int
@@ -567,8 +568,6 @@ struct StoreItemCardView: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
-
-                // ✅ IMAGE instead of SF Symbol
                 ZStack(alignment: .topTrailing) {
                     Circle()
                         .fill(color.opacity(0.25))
@@ -578,7 +577,7 @@ struct StoreItemCardView: View {
                         .resizable()
                         .scaledToFit()
                         .frame(width: 40, height: 40)
-                        .frame(width: 60, height: 60) // force center inside circle
+                        .frame(width: 60, height: 60)
 
                     Text("\(ownedCount)")
                         .font(.caption.bold())
@@ -702,7 +701,9 @@ struct DifficultySelectionView: View {
                         title: "Easy",
                         subtitle: "Friendly layouts with bigger match opportunities.",
                         symbol: "leaf.fill",
-                        color: .green
+                        color: .green,
+                        isLocked: !UnlockManager.shared.isUnlocked(mode: mode, difficulty: .easy),
+                        lockText: UnlockManager.shared.winsNeeded(mode: mode, difficulty: .easy)
                     ) {
                         onSelectDifficulty(.easy)
                     }
@@ -711,7 +712,9 @@ struct DifficultySelectionView: View {
                         title: "Medium",
                         subtitle: "Wider board with mostly pairs and more precision.",
                         symbol: "circle.grid.cross.fill",
-                        color: .orange
+                        color: .orange,
+                        isLocked: !UnlockManager.shared.isUnlocked(mode: mode, difficulty: .medium),
+                        lockText: UnlockManager.shared.winsNeeded(mode: mode, difficulty: .medium)
                     ) {
                         onSelectDifficulty(.medium)
                     }
@@ -720,7 +723,9 @@ struct DifficultySelectionView: View {
                         title: "Hard",
                         subtitle: "Largest board, fewer obvious clears, higher pressure.",
                         symbol: "flame.fill",
-                        color: .red
+                        color: .red,
+                        isLocked: !UnlockManager.shared.isUnlocked(mode: mode, difficulty: .hard),
+                        lockText: UnlockManager.shared.winsNeeded(mode: mode, difficulty: .hard)
                     ) {
                         onSelectDifficulty(.hard)
                     }
@@ -792,7 +797,6 @@ struct HowToPlayView: View {
     }
 }
 
-
 struct HowToPlayImagePageView: View {
     let imageName: String
     let footerText: String
@@ -843,6 +847,7 @@ struct BackstoryPageView: View {
         }
     }
 }
+
 struct StoryCard: View {
     let symbol: String
     let title: String
@@ -1015,6 +1020,8 @@ struct DifficultyCardView: View {
     let subtitle: String
     let symbol: String
     let color: Color
+    var isLocked: Bool = false
+    var lockText: String = ""
     let action: () -> Void
 
     var body: some View {
@@ -1022,11 +1029,11 @@ struct DifficultyCardView: View {
             HStack(spacing: 16) {
                 ZStack {
                     Circle()
-                        .fill(color.gradient)
+                        .fill(isLocked ? AnyShapeStyle(Color.gray.opacity(0.3)) : AnyShapeStyle(color.gradient))
                         .frame(width: 54, height: 54)
-                        .shadow(color: color.opacity(0.4), radius: 10, x: 0, y: 6)
+                        .shadow(color: isLocked ? .clear : color.opacity(0.4), radius: 10, x: 0, y: 6)
 
-                    Image(systemName: symbol)
+                    Image(systemName: isLocked ? "lock.fill" : symbol)
                         .font(.title2.bold())
                         .foregroundStyle(.white)
                 }
@@ -1034,31 +1041,32 @@ struct DifficultyCardView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(title)
                         .font(.title2.bold())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(isLocked ? .white.opacity(0.4) : .white)
 
-                    Text(subtitle)
+                    Text(isLocked ? lockText : subtitle)
                         .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.68))
+                        .foregroundStyle(.white.opacity(isLocked ? 0.5 : 0.68))
                         .multilineTextAlignment(.leading)
                 }
 
                 Spacer()
 
-                Image(systemName: "play.fill")
+                Image(systemName: isLocked ? "lock.fill" : "play.fill")
                     .font(.headline.bold())
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(.white.opacity(isLocked ? 0.25 : 0.55))
             }
             .padding(18)
             .background(
                 RoundedRectangle(cornerRadius: 24)
-                    .fill(.white.opacity(0.11))
+                    .fill(.white.opacity(isLocked ? 0.05 : 0.11))
                     .overlay {
                         RoundedRectangle(cornerRadius: 24)
-                            .stroke(.white.opacity(0.16), lineWidth: 1)
+                            .stroke(.white.opacity(isLocked ? 0.08 : 0.16), lineWidth: 1)
                     }
                     .shadow(color: .black.opacity(0.22), radius: 14, x: 0, y: 10)
             )
         }
+        .disabled(isLocked)
         .buttonStyle(.plain)
     }
 }
@@ -1085,7 +1093,7 @@ struct MenuSmallButton: View {
                 Text(title)
                     .font(.system(size: compact ? 10 : 12, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.78))
-                    .lineLimit(1)
+                    .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.72)
             }
             .frame(maxWidth: .infinity)
@@ -1182,7 +1190,7 @@ struct MenuCharacterView: View {
 
 struct AchievementsView: View {
     @Environment(\.dismiss) private var dismiss
-    
+
     @State private var showEndScene = false
     @AppStorage("achievementEndScene") private var achievementEndScene: Bool = false
 
@@ -1362,7 +1370,6 @@ struct AchievementsView: View {
             EndSceneView()
         }
     }
-        
 }
 
 struct AchievementRowData: Identifiable {
@@ -1465,7 +1472,106 @@ struct EndSceneView: View {
         .presentationDetents([.large])
     }
 }
-    
+
+// MARK: - Leaderboard
+
+struct LeaderboardView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var isLoading = false
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            OrbBackgroundView(floatAmount: -6)
+                .opacity(0.18)
+
+            VStack(spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Leaderboard")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+
+                        Text("Top scores worldwide")
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                Button {
+                    GameCenterManager.shared.showLeaderboard()
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "list.number")
+                            .font(.title2.bold())
+                            .foregroundStyle(.white)
+                            .frame(width: 54, height: 54)
+                            .background(Circle().fill(
+                                LinearGradient(colors: [.cyan, .blue], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            ))
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("View Global Leaderboard")
+                                .font(.headline.bold())
+                                .foregroundStyle(.white)
+                            Text("Powered by Game Center")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+
+                        Spacer()
+
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .padding(18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 22)
+                            .fill(.white.opacity(0.10))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 22)
+                                    .stroke(.white.opacity(0.14), lineWidth: 1)
+                            }
+                    )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 24)
+
+                Text("Sign in to Game Center in your iPhone Settings to submit and view scores.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.48))
+                    .padding(.horizontal, 32)
+
+                Spacer()
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
 #Preview {
     MainMenuView { _, _, _ in }
 }

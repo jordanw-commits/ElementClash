@@ -7,43 +7,60 @@ struct ContentView: View {
     @State private var selectedPuzzle: PuzzleLevel?
 
     var body: some View {
-        if let selectedPuzzle {
-            ShooterPrototypeView(
-                initialGameMode: .counter,
-                initialDifficulty: .medium,
-                isAimerEnabled: true,
-                onBackToMenu: {
-                    self.selectedPuzzle = nil
-                },
-                puzzleLevel: selectedPuzzle
-            )
-        } else if let selectedGame {
-            ShooterPrototypeView(
-                initialGameMode: selectedGame.mode,
-                initialDifficulty: selectedGame.difficulty,
-                isAimerEnabled: selectedGame.isAimerEnabled,
-                onBackToMenu: {
-                    self.selectedGame = nil
-                },
-                puzzleLevel: nil
-            )
-        } else {
-            MainMenuView(
-                            onSelectMode: { mode, difficulty, isAimerEnabled in
-                                selectedGame = SelectedGame(
-                                    mode: mode,
-                                    difficulty: difficulty,
-                                    isAimerEnabled: isAimerEnabled
-                                )
-                            },
-                            onSelectPuzzle: { puzzle in
-                                selectedPuzzle = puzzle
-                            }
+        ZStack {
+            ForEach(OrbType.allCases) { type in
+                OrbView(type: type, size: 1)
+                    .opacity(0.001)
+                    .allowsHitTesting(false)
+            }
+
+            if let selectedPuzzle {
+                ShooterPrototypeView(
+                    initialGameMode: .counter,
+                    initialDifficulty: .medium,
+                    isAimerEnabled: true,
+                    onBackToMenu: {
+                        self.selectedPuzzle = nil
+                    },
+                    puzzleLevel: selectedPuzzle,
+                    onNextPuzzle: { nextPuzzle in
+                        self.selectedPuzzle = nextPuzzle
+                    }
+                )
+                .id(selectedPuzzle.id)
+                } else if let selectedGame {
+                ShooterPrototypeView(
+                    initialGameMode: selectedGame.mode,
+                    initialDifficulty: selectedGame.difficulty,
+                    isAimerEnabled: selectedGame.isAimerEnabled,
+                    onBackToMenu: {
+                        self.selectedGame = nil
+                    },
+                    puzzleLevel: nil,
+                    onNextPuzzle: nil
+                )
+            } else {
+                MainMenuView(
+                    onSelectMode: { mode, difficulty, isAimerEnabled in
+                        selectedGame = SelectedGame(
+                            mode: mode,
+                            difficulty: difficulty,
+                            isAimerEnabled: isAimerEnabled
                         )
+                    },
+                    onSelectPuzzle: { _ in
+                        let tutorialsComplete = UserDefaults.standard.bool(forKey: "tutorialsComplete")
+                        if tutorialsComplete {
+                            selectedPuzzle = PuzzleLevels.all.first { $0.id == 7 }
+                        } else {
+                            selectedPuzzle = PuzzleLevels.all.first { $0.id == 1 }
+                        }
+                    }
+                )
+            }
         }
     }
 }
-
 
 final class SoundManager {
     static let shared = SoundManager()
@@ -837,6 +854,7 @@ struct ShooterPrototypeView: View {
     let isAimerEnabled: Bool
     let onBackToMenu: () -> Void
     let puzzleLevel: PuzzleLevel?
+    let onNextPuzzle: ((PuzzleLevel) -> Void)?
     @State private var difficulty: Difficulty = .easy
     private var playWidth: CGFloat {
         let colSpacing = orbSize * 0.92
@@ -877,6 +895,11 @@ struct ShooterPrototypeView: View {
     @State private var isGameOver: Bool = false
     @State private var puzzleShotsUsed: Int = 0
     @State private var isPuzzleMode: Bool = false
+    @State private var isPuzzleFailed: Bool = false
+    @State private var puzzleAimerEnabled: Bool = true
+    @State private var showCounterTutorial: Bool = false
+    @State private var usedAimer: Bool = false
+    @State private var sessionPoints: Int = 0
     @State private var showRules: Bool = false
     @State private var levelNumber: Int = 1
     @State private var unlockedAchievementTitle: String?
@@ -896,13 +919,17 @@ struct ShooterPrototypeView: View {
                 frozenShotsRemaining: frozenShotsRemaining,
                 currentMisses: missCount,
                 maxMisses: difficulty.missesBeforeDrop,
+                usedAimer: usedAimer,
                 onBack: onBackToMenu,
                 onRules: {
                     showRules = true
                 },
                 onPowerUp: {
                     showPowerUpPicker = true
-                }
+                },
+                onCounterHelp: gameMode == .counter ? {
+                    showCounterTutorial = true
+                } : nil
             )
             .padding(.horizontal, 18)
 
@@ -955,6 +982,7 @@ struct ShooterPrototypeView: View {
                     .frame(width: playWidth - 28, height: 5)
                     .shadow(color: .cyan.opacity(0.25), radius: 5, x: 0, y: 0)
                     .position(x: playWidth / 2, y: ceilingY)
+                
 
                 Capsule()
                     .fill(
@@ -968,7 +996,7 @@ struct ShooterPrototypeView: View {
                     .shadow(color: .red.opacity(0.65), radius: 7, x: 0, y: 0)
                     .position(x: playWidth / 2, y: dangerLineY)
 
-                if isAimerEnabled {
+                if isPuzzleMode ? puzzleAimerEnabled : isAimerEnabled {
                     Path { path in
                         let points = predictedTrajectoryPoints()
                         guard let firstPoint = points.first else { return }
@@ -1011,8 +1039,12 @@ struct ShooterPrototypeView: View {
                     )
                 }
 
-                NextOrbBoardPreviewView(nextType: nextType, orbSize: orbSize)
-                    .position(x: launcherPosition.x - 58, y: launcherY + 2)
+                NextOrbBoardPreviewView(
+                    nextType: nextType,
+                    orbSize: orbSize,
+                    shotsRemaining: isPuzzleMode ? (puzzleLevel.map { $0.shotQueue.count - puzzleShotsUsed } ?? nil) : nil
+                )
+                .position(x: launcherPosition.x - 58, y: launcherY + 2)
 
                 CharacterBacksView(
                     launcherPosition: launcherPosition,
@@ -1026,6 +1058,22 @@ struct ShooterPrototypeView: View {
                     .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 6)
                     .rotationEffect(.degrees(aimAngle + 90))
                     .position(launcherPosition)
+                
+                if isPuzzleMode {
+                    Button {
+                        puzzleAimerEnabled.toggle()
+                    } label: {
+                        Image(systemName: puzzleAimerEnabled ? "scope" : "scope")
+                            .font(.title3.bold())
+                            .foregroundStyle(puzzleAimerEnabled ? .cyan : .white.opacity(0.4))
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(.black.opacity(0.55)))
+                            .overlay {
+                                Circle().stroke(.white.opacity(0.18), lineWidth: 1)
+                            }
+                    }
+                    .position(x: playWidth - 28, y: launcherY - 60)
+                }
 
                 if movingOrb == nil && !isGameOver && !isLevelClear {
                     CurrentShotView(type: currentType, activePowerUp: activePowerUp, size: orbSize)
@@ -1053,35 +1101,69 @@ struct ShooterPrototypeView: View {
                     }
             )
             .onReceive(gameTimer) { _ in
-                updateMovingOrb()
+                            updateMovingOrb()
+                        }
+
+            if isPuzzleMode, let puzzle = puzzleLevel {
+                Text(puzzle.chamberName)
+                    .font(.system(size: 28, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.black.opacity(0.58))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(.white.opacity(0.15), lineWidth: 1)
+                            }
+                    )
+                    .padding(.horizontal, 18)
             }
 
-            if !isLevelClear {
-}
-
-            Spacer()
+                        Spacer()
         }
         .padding(.top)
         .overlay {
-                    if isLevelClear {
-                        if isPuzzleMode, let puzzle = puzzleLevel {
-                            PuzzleCompleteOverlayView(
-                                chamberName: puzzle.chamberName,
-                                shotsUsed: puzzleShotsUsed,
-                                parShots: puzzle.parShots,
-                                onBackToMenu: onBackToMenu
-                            )
-                        } else {
-                            LevelCompleteOverlayView(
-                                levelPoints: lastCompletedLevelPoints,
-                                bonusPoints: 100,
-                                totalScore: totalPoints,
-                                onNextLevel: nextLevel,
-                                onBackToMenu: onBackToMenu
-                            )
-                        }
-                    }
+            if isPuzzleFailed, let puzzle = puzzleLevel {
+                PuzzleFailedOverlayView(
+                    chamberName: puzzle.chamberName,
+                    onRetry: {
+                        isPuzzleFailed = false
+                        resetGame()
+                    },
+                    onBackToMenu: onBackToMenu
+                )
+            } else if isLevelClear {
+                if isPuzzleMode, let puzzle = puzzleLevel {
+                    PuzzleCompleteOverlayView(
+                        chamberName: puzzle.chamberName,
+                        shotsUsed: puzzleShotsUsed,
+                        parShots: puzzle.parShots,
+                        twoStarShots: puzzle.twoStarShots,
+                        oneStarShots: puzzle.oneStarShots,
+                        hasNextLevel: PuzzleLevels.all.first { $0.id == puzzle.id + 1 } != nil,
+                        onNextLevel: {
+                            if puzzle.id == 6 {
+                                UserDefaults.standard.set(true, forKey: "tutorialsComplete")
+                            }
+                            if let nextPuzzle = PuzzleLevels.all.first(where: { $0.id == puzzle.id + 1 }) {
+                                onNextPuzzle?(nextPuzzle)
+                            }
+                        },
+                        onBackToMenu: onBackToMenu
+                    )
+                } else {
+                    LevelCompleteOverlayView(
+                        levelPoints: lastCompletedLevelPoints,
+                        bonusPoints: 100,
+                        totalScore: totalPoints,
+                        onNextLevel: nextLevel,
+                        onBackToMenu: onBackToMenu
+                    )
                 }
+            }
+        }
         .overlay(alignment: .top) {
             if let unlockedAchievementTitle {
                 AchievementToastView(title: unlockedAchievementTitle)
@@ -1092,9 +1174,16 @@ struct ShooterPrototypeView: View {
             }
         }
         .onAppear {
-            gameMode = initialGameMode
-            difficulty = initialDifficulty
-            resetGame()
+                    gameMode = initialGameMode
+                    difficulty = initialDifficulty
+                    sessionPoints = 0
+                    resetGame()
+            if gameMode == .counter && difficulty == .easy && !UserDefaults.standard.bool(forKey: "counterTutorialShown") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    showCounterTutorial = true
+                    UserDefaults.standard.set(true, forKey: "counterTutorialShown")
+                }
+            }
         }
         .sheet(isPresented: $showRules) {
             RulesSheetView(gameMode: gameMode)
@@ -1134,6 +1223,10 @@ struct ShooterPrototypeView: View {
                 }
             )
             .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showCounterTutorial) {
+            CounterTutorialView()
+                .presentationDetents([.large])
         }
     }
 
@@ -1352,6 +1445,7 @@ struct ShooterPrototypeView: View {
         guard movingOrb == nil && !isGameOver && !isLevelClear else { return }
 
         SoundManager.shared.play("orb_launch")
+        if isAimerEnabled && !isPuzzleMode { usedAimer = true }
 
         aimAngle = lastStableAimAngle
 
@@ -1472,15 +1566,19 @@ struct ShooterPrototypeView: View {
         checkGameOver()
 
         if !isLevelClear && !isGameOver {
-                if isPuzzleMode, let puzzle = puzzleLevel {
-                    puzzleShotsUsed += 1
-                    let nextIndex = puzzleShotsUsed + 1
+            if isPuzzleMode, let puzzle = puzzleLevel {
+                puzzleShotsUsed += 1
+                let nextIndex = puzzleShotsUsed + 1
+                if puzzleShotsUsed >= puzzle.shotQueue.count && !isLevelClear {
+                    isPuzzleFailed = true
+                } else {
                     currentType = nextIndex < puzzle.shotQueue.count ? puzzle.shotQueue[puzzleShotsUsed] : nextType
                     nextType = nextIndex + 1 < puzzle.shotQueue.count ? puzzle.shotQueue[nextIndex] : randomOrbForCurrentMode()
-                } else {
-                    currentType = nextType
-                    nextType = randomOrbForCurrentMode()
                 }
+            } else {
+                currentType = nextType
+                nextType = randomOrbForCurrentMode()
+            }
             }
     }
 
@@ -1583,6 +1681,35 @@ struct ShooterPrototypeView: View {
         }
     }
 
+    private func checkForNewUnlock(mode: GameMode, difficulty: Difficulty) -> String? {
+        switch (mode, difficulty) {
+        case (.classic, .easy):
+            if !UnlockManager.shared.classicMediumUnlocked { return "Classic Medium Unlocked!" }
+        case (.classic, .medium):
+            if !UnlockManager.shared.classicHardUnlocked { return "Classic Hard Unlocked!" }
+        case (.classic, .hard):
+            if !UnlockManager.shared.counterEasyUnlocked { return "Counter Mode Unlocked!" }
+        case (.counter, .easy):
+            if !UnlockManager.shared.counterMediumUnlocked { return "Counter Medium Unlocked!" }
+        case (.counter, .medium):
+            if !UnlockManager.shared.counterHardUnlocked { return "Counter Hard Unlocked!" }
+        default:
+            return nil
+        }
+        return nil
+    }
+
+    private func showUnlockToast(_ title: String) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.86)) {
+            unlockedAchievementTitle = "🔓 " + title
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation(.easeOut(duration: 0.25)) {
+                self.unlockedAchievementTitle = nil
+            }
+        }
+    }
+
     private func checkLevelClear() {
         if stuckOrbs.isEmpty && !isLevelClear {
             SoundManager.shared.play("level_complete")
@@ -1592,6 +1719,22 @@ struct ShooterPrototypeView: View {
                     isAimerEnabled: isAimerEnabled
                 )
             )
+
+            if !isPuzzleMode {
+                let unlockTitle = checkForNewUnlock(mode: gameMode, difficulty: difficulty)
+                UnlockManager.shared.recordWin(mode: gameMode, difficulty: difficulty)
+                sessionPoints += levelPoints + 100
+                let submittedScore = sessionPoints
+                GameCenterManager.shared.onScoreSubmitted = { score in
+                    self.showUnlockToast("Score \(score) pts submitted!")
+                }
+                GameCenterManager.shared.submitScore(submittedScore)
+                if let title = unlockTitle {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        self.showUnlockToast(title)
+                    }
+                }
+            }
 
             isLevelClear = true
             movingOrb = nil
@@ -2348,9 +2491,11 @@ struct GameTopHUDView: View {
     let frozenShotsRemaining: Int
     let currentMisses: Int
     let maxMisses: Int
+    var usedAimer: Bool = false
     let onBack: () -> Void
     let onRules: () -> Void
     let onPowerUp: () -> Void
+    var onCounterHelp: (() -> Void)? = nil
 
     private var dangerRatio: CGFloat {
         guard maxMisses > 0 else { return 0 }
@@ -2390,15 +2535,36 @@ struct GameTopHUDView: View {
                     )
                 }
 
-                Button(action: onRules) {
-                    Image(systemName: "questionmark")
-                        .font(.title3.bold())
-                        .foregroundStyle(.white)
-                        .frame(width: 42, height: 42)
-                        .background(Circle().fill(.black.opacity(0.72)))
-                        .overlay {
-                            Circle().stroke(.white.opacity(0.18), lineWidth: 1)
+                HStack(spacing: 6) {
+                    if usedAimer {
+                        Text("🧀")
+                            .font(.system(size: 20))
+                            .frame(width: 36, height: 36)
+                            .background(Circle().fill(.black.opacity(0.58)))
+                            .overlay { Circle().stroke(.yellow.opacity(0.4), lineWidth: 1) }
+                    }
+
+                    if let onCounterHelp {
+                        Button(action: onCounterHelp) {
+                            Image(systemName: "bolt.questionmark.fill")
+                                .font(.title3.bold())
+                                .foregroundStyle(.orange)
+                                .frame(width: 42, height: 42)
+                                .background(Circle().fill(.black.opacity(0.72)))
+                                .overlay { Circle().stroke(.white.opacity(0.18), lineWidth: 1) }
                         }
+                    }
+
+                    Button(action: onRules) {
+                        Image(systemName: "questionmark")
+                            .font(.title3.bold())
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .background(Circle().fill(.black.opacity(0.72)))
+                            .overlay {
+                                Circle().stroke(.white.opacity(0.18), lineWidth: 1)
+                            }
+                    }
                 }
             }
 
@@ -2550,6 +2716,7 @@ struct HUDPowerUpCardView: View {
 struct NextOrbBoardPreviewView: View {
     let nextType: OrbType
     let orbSize: CGFloat
+    var shotsRemaining: Int? = nil
 
     var body: some View {
         VStack(spacing: 4) {
@@ -2559,6 +2726,13 @@ struct NextOrbBoardPreviewView: View {
                 .tracking(1)
 
             OrbView(type: nextType, size: orbSize * 0.92)
+
+            if let shotsRemaining {
+                Text("\(shotsRemaining) left")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .foregroundStyle(shotsRemaining <= 3 ? .red : .white.opacity(0.86))
+                    .tracking(1)
+            }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -2923,6 +3097,112 @@ struct SelectedGame {
     let mode: GameMode
     let difficulty: Difficulty
     let isAimerEnabled: Bool
+}
+
+struct CounterTutorialView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let counters: [(String, Color, String, Color)] = [
+        ("💧 Water", .blue,    "🔥 Fire",      .red),
+        ("💧 Water", .blue,    "🪨 Rock",      .brown),
+        ("🔥 Fire",  .red,     "🌱 Plant",     .green),
+        ("🌱 Plant", .green,   "💧 Water",     .blue),
+        ("⚡️ Electric", .yellow, "💧 Water",  .blue),
+        ("🪨 Rock",  .brown,   "⚡️ Electric", .yellow),
+    ]
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            OrbBackgroundView(floatAmount: -6)
+                .opacity(0.18)
+
+            VStack(spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Counter Guide")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+                        Text("Use stronger types to clear weaker ones.")
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                VStack(spacing: 12) {
+                    ForEach(Array(counters.enumerated()), id: \.offset) { _, counter in
+                        HStack(spacing: 12) {
+                            Text(counter.0)
+                                .font(.headline.bold())
+                                .foregroundStyle(counter.1)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            Text("beats")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.5))
+                            Text(counter.2)
+                                .font(.headline.bold())
+                                .foregroundStyle(counter.3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.white.opacity(0.08))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .stroke(.white.opacity(0.12), lineWidth: 1)
+                                }
+                        )
+                    }
+                }
+                .padding(.horizontal, 24)
+
+                Text("Tap the ⚡️? button anytime during play to see this guide again.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 32)
+
+                Button { dismiss() } label: {
+                    Text("Got it — let's play!")
+                        .font(.headline.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .foregroundStyle(.white)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(LinearGradient(
+                                    colors: [.orange.opacity(0.9), .red.opacity(0.8)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 24)
+
+                Spacer()
+            }
+        }
+    }
 }
 
 #Preview {

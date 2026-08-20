@@ -13,4 +13,6 @@ struct PuzzleLevel {
     let grid: [[OrbType?]]
     let shotQueue: [OrbType]
     let parShots: Int
+    let twoStarShots: Int
+    let oneStarShots: Int
 }
