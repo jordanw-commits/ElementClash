@@ -894,6 +894,7 @@ struct ShooterPrototypeView: View {
     @State private var showFreezeTypePicker: Bool = false
     @State private var showPowerUpPicker: Bool = false
     @State private var levelPoints: Int = 0
+    @State private var shotsFiredThisLevel: Int = 0
     @State private var lastCompletedLevelPoints: Int = 0
     @State private var movingOrb: MovingOrb?
     @State private var stuckOrbs: [StuckOrb] = []
@@ -922,7 +923,7 @@ struct ShooterPrototypeView: View {
                 modeTitle: gameMode.rawValue,
                 levelNumber: levelNumber,
                 difficulty: difficulty,
-                score: totalPoints,
+                score: levelPoints,
                 nextType: nextType,
                 activePowerUp: activePowerUp,
                 frozenType: frozenType,
@@ -931,7 +932,7 @@ struct ShooterPrototypeView: View {
                 maxMisses: difficulty.missesBeforeDrop,
                 usedAimer: usedAimer,
                 onBack: {
-                    if sessionPoints > 0 {
+                    if sessionPoints > 0 && !usedAimer {
                         GameCenterManager.shared.onScoreSubmitted = { score in
                             self.showUnlockToast("🏆 Score \(score) pts submitted!")
                         }
@@ -1175,10 +1176,11 @@ struct ShooterPrototypeView: View {
                     LevelCompleteOverlayView(
                         levelPoints: lastCompletedLevelPoints,
                         bonusPoints: 100,
-                        totalScore: totalPoints,
+                        roundTotal: sessionPoints,
+                        shotsFired: shotsFiredThisLevel,
                         onNextLevel: nextLevel,
                         onBackToMenu: {
-                            if sessionPoints > 0 {
+                            if sessionPoints > 0 && !usedAimer {
                                 GameCenterManager.shared.onScoreSubmitted = { score in
                                     self.showUnlockToast("🏆 Score \(score) pts submitted!")
                                 }
@@ -1270,6 +1272,7 @@ struct ShooterPrototypeView: View {
         aimAngle = -90
         lastStableAimAngle = -90
         levelPoints = 0
+        shotsFiredThisLevel = 0
         lastCompletedLevelPoints = 0
         activePowerUp = nil
         frozenType = nil
@@ -1472,6 +1475,7 @@ struct ShooterPrototypeView: View {
 
         SoundManager.shared.play("orb_launch")
         if isAimerEnabled && !isPuzzleMode { usedAimer = true }
+        if !isPuzzleMode { shotsFiredThisLevel += 1 }
 
         aimAngle = lastStableAimAngle
 
@@ -2050,7 +2054,8 @@ struct AchievementToastView: View {
 struct LevelCompleteOverlayView: View {
     let levelPoints: Int
     let bonusPoints: Int
-    let totalScore: Int
+    let roundTotal: Int
+    let shotsFired: Int
     let onNextLevel: () -> Void
     let onBackToMenu: () -> Void
 
@@ -2086,14 +2091,14 @@ struct LevelCompleteOverlayView: View {
                         .frame(height: 1)
                         .padding(.vertical, 4)
 
-                    ScoreRow(label: "Level Total", value: levelPoints + bonusPoints, isTotal: true)
+                    ScoreRow(label: "Shots Fired", value: shotsFired, isGameTotal: false)
 
                     Rectangle()
                         .fill(.white.opacity(0.12))
                         .frame(height: 1)
                         .padding(.vertical, 2)
 
-                    ScoreRow(label: "Total Game Points", value: totalScore, isGameTotal: true)
+                    ScoreRow(label: "Round Total", value: roundTotal, isGameTotal: true)
                 }
                 .padding(18)
                 .background(
@@ -2557,14 +2562,6 @@ struct GameTopHUDView: View {
                 }
 
                 HStack(spacing: 6) {
-                    if usedAimer {
-                        Text("🧀")
-                            .font(.system(size: 20))
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(.black.opacity(0.58)))
-                            .overlay { Circle().stroke(.yellow.opacity(0.4), lineWidth: 1) }
-                    }
-
                     if let onCounterHelp {
                         Button(action: onCounterHelp) {
                             Image(systemName: "bolt.questionmark.fill")

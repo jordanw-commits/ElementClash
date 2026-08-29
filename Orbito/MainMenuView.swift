@@ -21,15 +21,6 @@ struct MainMenuView: View {
     @AppStorage("typeEraseCount") private var typeEraseCount: Int = 0
 
     var body: some View {
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            iPadBody
-        } else {
-            iPhoneBody
-        }
-    }
-
-    // MARK: - iPhone Layout (original, unchanged)
-    var iPhoneBody: some View {
         ZStack {
             Image("menu_background")
                 .resizable()
@@ -140,7 +131,9 @@ struct MainMenuView: View {
                     .zIndex(20)
             }
         }
-        .sheet(isPresented: $showHowToPlay) { HowToPlayView() }
+        .sheet(isPresented: $showHowToPlay) {
+            HowToPlayView()
+        }
         .sheet(isPresented: $showStore) {
             StoreView(
                 totalPoints: $totalPoints,
@@ -149,138 +142,15 @@ struct MainMenuView: View {
                 typeEraseCount: $typeEraseCount
             )
         }
-        .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(isPresented: $showAchievements) { AchievementsView() }
-        .sheet(isPresented: $showLeaderboard) { LeaderboardView() }
-        .sheet(item: $selectedModeForDifficulty) { mode in
-            DifficultySelectionView(
-                mode: mode,
-                isAimerEnabled: $isAimerEnabled
-            ) { difficulty in
-                selectedModeForDifficulty = nil
-                onSelectMode(mode, difficulty, isAimerEnabled)
-            }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
-        .onAppear {
-            GameCenterManager.shared.authenticate()
+        .sheet(isPresented: $showAchievements) {
+            AchievementsView()
         }
-    }
-
-    // MARK: - iPad Layout
-    var iPadBody: some View {
-        ZStack {
-            Image("menu_background")
-                .resizable()
-                .scaledToFill()
-                .ignoresSafeArea()
-
-            LinearGradient(
-                colors: [
-                    .black.opacity(0.24),
-                    .black.opacity(0.04),
-                    .black.opacity(0.28)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            VStack(spacing: 16) {
-                VStack(spacing: 10) {
-                    Text("Element Clash")
-                        .font(.system(size: 64, weight: .black, design: .rounded))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.white, .cyan.opacity(0.9), .blue.opacity(0.8)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .shadow(color: .black.opacity(0.70), radius: 9, x: 0, y: 4)
-                        .shadow(color: .cyan.opacity(0.28), radius: 14, x: 0, y: 5)
-
-                    Text("Aim • Match • Counter • Clear")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.88))
-                        .shadow(color: .black.opacity(0.70), radius: 5, x: 0, y: 2)
-                }
-                .padding(.horizontal, 40)
-                .padding(.top, 20)
-
-                HStack(spacing: 16) {
-                    ModeCardView(
-                        title: "Classic",
-                        subtitle: "Match 3 orbs. Water clears Fire.",
-                        symbol: "sparkles",
-                        gradientColors: [.blue, .cyan]
-                    ) {
-                        selectedModeForDifficulty = .classic
-                    }
-
-                    ModeCardView(
-                        title: "Counter Mode",
-                        subtitle: "No matches. Clear with type counters.",
-                        symbol: "bolt.fill",
-                        gradientColors: [.purple, .orange]
-                    ) {
-                        selectedModeForDifficulty = .counter
-                    }
-                }
-                .padding(.horizontal, 40)
-
-                LazyVGrid(columns: [
-                    GridItem(.flexible()),
-                    GridItem(.flexible()),
-                    GridItem(.flexible())
-                ], spacing: 14) {
-                    MenuSmallButton(title: "How to Play", symbol: "book.fill", compact: true, style: .highlight) {
-                        showHowToPlay = true
-                    }
-                    MenuSmallButton(title: "Settings", symbol: "gearshape.fill", compact: true, style: .highlight) {
-                        showSettings = true
-                    }
-                    MenuSmallButton(title: "Store", symbol: "bag.fill", compact: true, style: .highlight) {
-                        showStore = true
-                    }
-                    MenuSmallButton(title: "Achievements", symbol: "trophy.fill", compact: true, style: .highlight) {
-                        showAchievements = true
-                    }
-                    MenuSmallButton(title: "Leaderboard", symbol: "list.number", compact: true, style: .highlight) {
-                        showLeaderboard = true
-                    }
-                    MenuSmallButton(title: "Puzzle Mode\n(Coming Soon)", symbol: "puzzlepiece.fill", compact: true, style: .highlight) {
-                    }
-                    .opacity(0.45)
-                    .allowsHitTesting(false)
-                }
-                .padding(.horizontal, 40)
-            }
-            .padding(.top, -40)
-            .ignoresSafeArea(.all, edges: .top)
+        .sheet(isPresented: $showLeaderboard) {
+            LeaderboardView()
         }
-        .overlay(alignment: .top) {
-            if let unlockedAchievementTitle {
-                StoreAchievementToastView(title: unlockedAchievementTitle)
-                    .padding(.top, 18)
-                    .padding(.horizontal, 40)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(20)
-            }
-        }
-        .sheet(isPresented: $showHowToPlay) { HowToPlayView() }
-        .sheet(isPresented: $showStore) {
-            StoreView(
-                totalPoints: $totalPoints,
-                bombOrbCount: $bombOrbCount,
-                typeFreezeCount: $typeFreezeCount,
-                typeEraseCount: $typeEraseCount
-            )
-        }
-        .sheet(isPresented: $showSettings) { SettingsView() }
-        .sheet(isPresented: $showAchievements) { AchievementsView() }
-        .sheet(isPresented: $showLeaderboard) { LeaderboardView() }
         .sheet(item: $selectedModeForDifficulty) { mode in
             DifficultySelectionView(
                 mode: mode,
@@ -1694,6 +1564,13 @@ struct LeaderboardView: View {
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white.opacity(0.48))
                     .padding(.horizontal, 32)
+
+                Text("🎯 Scores are only submitted when playing without the aimer. Turn off the aimer in the difficulty screen to compete on the leaderboard.")
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.orange.opacity(0.85))
+                    .padding(.horizontal, 32)
+                    .padding(.top, 4)
 
                 Spacer()
             }
