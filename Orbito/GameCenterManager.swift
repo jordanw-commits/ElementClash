@@ -1,10 +1,3 @@
-//
-//  GameCenterManager.swift
-//  Orbito
-//
-//  Created by Jordan Westlund on 8/12/26.
-//
-
 import GameKit
 import UIKit
 
@@ -12,7 +5,7 @@ final class GameCenterManager: NSObject {
     static let shared = GameCenterManager()
 
     let leaderboardID = "com.flyingtire.elementclash.highscore"
-    
+
     var onScoreSubmitted: ((Int) -> Void)?
 
     private var rootViewController: UIViewController? {
@@ -65,13 +58,23 @@ final class GameCenterManager: NSObject {
             return
         }
 
-        let vc = GKGameCenterViewController(
-            leaderboardID: leaderboardID,
-            playerScope: .global,
-            timeScope: .allTime
-        )
-        vc.gameCenterDelegate = self
-        rootViewController?.present(vc, animated: true)
+        DispatchQueue.main.async {
+            guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let rootVC = windowScene.windows.first?.rootViewController else { return }
+
+            var topVC = rootVC
+            while let presented = topVC.presentedViewController {
+                topVC = presented
+            }
+
+            let vc = GKGameCenterViewController(
+                leaderboardID: self.leaderboardID,
+                playerScope: .global,
+                timeScope: .allTime
+            )
+            vc.gameCenterDelegate = self
+            topVC.present(vc, animated: true)
+        }
     }
 }
 

@@ -19,10 +19,10 @@
                         <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <subviews>
-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="launch_background" id="HT8-og-bVZ">
-                                <rect key="frame" x="0.0" y="0.0" width="412" height="902"/>
-                                <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                            </imageView>
+<imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="launch_background" id="HT8-og-bVZ">
+    <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+    <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+</imageView>
                         </subviews>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
                     </view>

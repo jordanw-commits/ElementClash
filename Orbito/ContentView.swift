@@ -856,18 +856,28 @@ struct ShooterPrototypeView: View {
     let puzzleLevel: PuzzleLevel?
     let onNextPuzzle: ((PuzzleLevel) -> Void)?
     @State private var difficulty: Difficulty = .easy
+    // Scale all dimensions based on available screen size
+    private var screenHeight: CGFloat { UIScreen.main.bounds.height }
+    private var screenWidth: CGFloat { UIScreen.main.bounds.width }
+
+    // Base design was 390pt wide, 844pt tall iPhone
+    private var scaleH: CGFloat { screenHeight / 844.0 }
+    private var scaleW: CGFloat { min(screenWidth / 390.0, 1.6) }
+    private var scale: CGFloat { min(scaleH, scaleW) }
+
+    private var orbSize: CGFloat { 34 * scale }
+    private var playHeight: CGFloat { screenHeight - 200 * scaleH }
+    private var launcherY: CGFloat { 560 * scaleH }
+    private var shotSpeed: CGFloat { 8 * scale }
+    private var shotCollisionDistance: CGFloat { 29 * scale }
+    private var boardDropAmount: CGFloat { 28 * scale }
+    private var startingCeilingY: CGFloat { 30 * scale }
+    private var dangerLineY: CGFloat { 505 * scaleH }
+
     private var playWidth: CGFloat {
         let colSpacing = orbSize * 0.92
         return orbSize + CGFloat(difficulty.columnCount - 1) * colSpacing
     }
-    private let playHeight: CGFloat = UIScreen.main.bounds.height - 200
-    private let orbSize: CGFloat = 34
-    private let launcherY: CGFloat = 560
-    private let shotSpeed: CGFloat = 8
-    private let shotCollisionDistance: CGFloat = 29
-    private let boardDropAmount: CGFloat = 28
-    private let startingCeilingY: CGFloat = 30
-    private let dangerLineY: CGFloat = 505
 
     @State private var gameMode: GameMode = .classic
     @State private var aimAngle: Double = -90
@@ -920,7 +930,15 @@ struct ShooterPrototypeView: View {
                 currentMisses: missCount,
                 maxMisses: difficulty.missesBeforeDrop,
                 usedAimer: usedAimer,
-                onBack: onBackToMenu,
+                onBack: {
+                    if sessionPoints > 0 {
+                        GameCenterManager.shared.onScoreSubmitted = { score in
+                            self.showUnlockToast("🏆 Score \(score) pts submitted!")
+                        }
+                        GameCenterManager.shared.submitScore(sessionPoints)
+                    }
+                    onBackToMenu()
+                },
                 onRules: {
                     showRules = true
                 },
@@ -1724,11 +1742,6 @@ struct ShooterPrototypeView: View {
                 let unlockTitle = checkForNewUnlock(mode: gameMode, difficulty: difficulty)
                 UnlockManager.shared.recordWin(mode: gameMode, difficulty: difficulty)
                 sessionPoints += levelPoints + 100
-                let submittedScore = sessionPoints
-                GameCenterManager.shared.onScoreSubmitted = { score in
-                    self.showUnlockToast("Score \(score) pts submitted!")
-                }
-                GameCenterManager.shared.submitScore(submittedScore)
                 if let title = unlockTitle {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                         self.showUnlockToast(title)
