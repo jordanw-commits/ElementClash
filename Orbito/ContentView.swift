@@ -1177,7 +1177,15 @@ struct ShooterPrototypeView: View {
                         bonusPoints: 100,
                         totalScore: totalPoints,
                         onNextLevel: nextLevel,
-                        onBackToMenu: onBackToMenu
+                        onBackToMenu: {
+                            if sessionPoints > 0 {
+                                GameCenterManager.shared.onScoreSubmitted = { score in
+                                    self.showUnlockToast("🏆 Score \(score) pts submitted!")
+                                }
+                                GameCenterManager.shared.submitScore(sessionPoints)
+                            }
+                            onBackToMenu()
+                        }
                     )
                 }
             }
