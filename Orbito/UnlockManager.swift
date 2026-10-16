@@ -32,12 +32,24 @@ final class UnlockManager {
         get { defaults.integer(forKey: "counterMediumWins") }
         set { defaults.set(newValue, forKey: "counterMediumWins") }
     }
+    var counterHardWins: Int {
+        get { defaults.integer(forKey: "counterHardWins") }
+        set { defaults.set(newValue, forKey: "counterHardWins") }
+    }
 
     var classicMediumUnlocked: Bool { classicEasyWins >= 1 }
     var classicHardUnlocked: Bool { classicMediumWins >= 1 }
     var counterEasyUnlocked: Bool { classicHardWins >= 1 }
     var counterMediumUnlocked: Bool { counterEasyWins >= 1 }
     var counterHardUnlocked: Bool { counterMediumWins >= 1 }
+
+    // Puzzle Mode opens at the same moment Counter Hard does.
+    // To require a Counter Hard win instead, change this to: counterHardWins >= 1
+    var puzzleModeUnlocked: Bool { counterHardUnlocked }
+
+    var puzzleModeLockText: String {
+        "Win \(counterMediumWins)/1 Counter Medium game to unlock"
+    }
 
     func isUnlocked(mode: GameMode, difficulty: Difficulty) -> Bool {
         switch (mode, difficulty) {
@@ -57,7 +69,7 @@ final class UnlockManager {
         case (.classic, .hard):   classicHardWins += 1
         case (.counter, .easy):   counterEasyWins += 1
         case (.counter, .medium): counterMediumWins += 1
-        case (.counter, .hard):   counterMediumWins += 1
+        case (.counter, .hard):   counterHardWins += 1   // was counterMediumWins (bug)
         }
     }
 

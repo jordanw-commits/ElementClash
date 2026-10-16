@@ -49,16 +49,49 @@ struct ContentView: View {
                         )
                     },
                     onSelectPuzzle: { _ in
-                        let tutorialsComplete = UserDefaults.standard.bool(forKey: "tutorialsComplete")
-                        if tutorialsComplete {
-                            selectedPuzzle = PuzzleLevels.all.first { $0.id == 7 }
-                        } else {
-                            selectedPuzzle = PuzzleLevels.all.first { $0.id == 1 }
-                        }
+                        // Every time Puzzle Mode is entered from the menu, a new run starts at 0
+                        // from the beginning — players don't pick a level.
+                        PuzzleRun.shared.score = 0
+                        selectedPuzzle = PuzzleRun.startingLevel()
                     }
                 )
             }
         }
+    }
+}
+
+// Puzzle Mode run: the score carries across levels until the player loses or leaves.
+final class PuzzleRun {
+    static let shared = PuzzleRun()
+    private init() { }
+
+    var score: Int = 0
+    var aimerEnabled: Bool = true   // chosen when the run starts; locked until the run ends
+
+    static let noAimerBonus = 100
+
+    static func starPoints(for stars: Int) -> Int {
+        switch stars {
+        case 3: return 500
+        case 2: return 300
+        case 1: return 200
+        default: return 0
+        }
+    }
+
+    // Called whenever a run ends (lose, quit, or finish the last level).
+    // Only no-aimer runs go to the Puzzle leaderboard, matching the regular-play rule.
+    // To also accept aimer runs, remove "!aimerEnabled".
+    func submitToLeaderboard() {
+        guard score > 0, !aimerEnabled else { return }
+        GameCenterManager.shared.submitScore(score, toLeaderboard: GameCenterManager.shared.puzzleLeaderboardID)
+    }
+
+    // Where a run begins: the first chamber once the tutorials are done, otherwise Tutorial 1.
+    static func startingLevel() -> PuzzleLevel? {
+        let tutorialsComplete = UserDefaults.standard.bool(forKey: "tutorialsComplete")
+        let startID = tutorialsComplete ? 7 : 1
+        return PuzzleLevels.all.first { $0.id == startID }
     }
 }
 
@@ -265,6 +298,56 @@ final class AchievementManager {
                 ) {
                     unlocked.append(title)
                 }
+            }
+        }
+
+        return unlocked
+    }
+
+    // MARK: - Puzzle Mode
+
+    /// Best stars per puzzle level, saved by level name (so reordering levels keeps progress).
+    static let puzzleBestStarsKey = "puzzleBestStars"
+
+    static func puzzleBestStars() -> [String: Int] {
+        UserDefaults.standard.dictionary(forKey: puzzleBestStarsKey) as? [String: Int] ?? [:]
+    }
+
+    /// How many puzzle levels have at least `minStars` as their best.
+    static func puzzleLevelsWith(atLeast minStars: Int) -> Int {
+        let best = puzzleBestStars()
+        return PuzzleLevels.all.filter { (best[$0.chamberName] ?? 0) >= minStars }.count
+    }
+
+    func recordPuzzleLevelComplete(
+        level: PuzzleLevel,
+        stars: Int,
+        aimerEnabled: Bool,
+        runScore: Int
+    ) -> [String] {
+        var unlocked: [String] = []
+
+        // Save the best stars for this level.
+        var best = AchievementManager.puzzleBestStars()
+        best[level.chamberName] = max(best[level.chamberName] ?? 0, stars)
+        defaults.set(best, forKey: AchievementManager.puzzleBestStarsKey)
+
+        let total = PuzzleLevels.all.count
+        let isLastLevel = PuzzleLevels.all.last?.id == level.id
+
+        let checks: [(String, String, Bool)] = [
+            ("Tutorial Graduate", "achievementPuzzleTutorials", level.id == 6),
+            ("Puzzle Solver", "achievementPuzzleSolver", isLastLevel),
+            ("Steady Hand", "achievementPuzzleNoAimer", isLastLevel && !aimerEnabled),
+            ("Star Collector I", "achievementPuzzleStars1", AchievementManager.puzzleLevelsWith(atLeast: 1) >= total),
+            ("Star Collector II", "achievementPuzzleStars2", AchievementManager.puzzleLevelsWith(atLeast: 2) >= total),
+            ("Perfectionist", "achievementPuzzleStars3", AchievementManager.puzzleLevelsWith(atLeast: 3) >= total),
+            ("Puzzle Pro", "achievementPuzzleScore10000", runScore >= 10000)
+        ]
+
+        for (title, key, condition) in checks {
+            if let title = unlockIfNeeded(title: title, key: key, condition: condition) {
+                unlocked.append(title)
             }
         }
 
@@ -879,6 +962,19 @@ struct ShooterPrototypeView: View {
         return orbSize + CGFloat(difficulty.columnCount - 1) * colSpacing
     }
 
+    // Narrow puzzle boards: the playable channel sits centered inside the board,
+    // with walls on either side. Standard boards use the full width (no walls).
+    private var channelColumnCount: Int? { puzzleLevel?.columns }
+
+    private var channelWidth: CGFloat {
+        guard let columns = channelColumnCount else { return playWidth }
+        let colSpacing = orbSize * 0.92
+        return min(playWidth, orbSize + CGFloat(columns - 1) * colSpacing)
+    }
+
+    private var leftWallX: CGFloat { (playWidth - channelWidth) / 2 }
+    private var rightWallX: CGFloat { leftWallX + channelWidth }
+
     @State private var gameMode: GameMode = .classic
     @State private var aimAngle: Double = -90
     @State private var lastStableAimAngle: Double = -90
@@ -908,6 +1004,10 @@ struct ShooterPrototypeView: View {
     @State private var isPuzzleMode: Bool = false
     @State private var isPuzzleFailed: Bool = false
     @State private var puzzleAimerEnabled: Bool = true
+    @State private var puzzleUsedAimer: Bool = false      // aimer on for any shot this level
+    @State private var puzzleLevelStars: Int = 0
+    @State private var puzzleLevelStarPoints: Int = 0
+    @State private var puzzleLevelAimerBonus: Int = 0
     @State private var showCounterTutorial: Bool = false
     @State private var usedAimer: Bool = false
     @State private var sessionPoints: Int = 0
@@ -932,6 +1032,7 @@ struct ShooterPrototypeView: View {
                 maxMisses: difficulty.missesBeforeDrop,
                 usedAimer: usedAimer,
                 onBack: {
+                    if isPuzzleMode { PuzzleRun.shared.submitToLeaderboard() }
                     if sessionPoints > 0 && !usedAimer {
                         GameCenterManager.shared.onScoreSubmitted = { score in
                             self.showUnlockToast("🏆 Score \(score) pts submitted!")
@@ -948,7 +1049,9 @@ struct ShooterPrototypeView: View {
                 },
                 onCounterHelp: gameMode == .counter ? {
                     showCounterTutorial = true
-                } : nil
+                } : nil,
+                chamberName: isPuzzleMode ? puzzleLevel?.chamberName : nil,
+                puzzleLevelNumber: isPuzzleMode ? puzzleLevel?.id : nil
             )
             .padding(.horizontal, 18)
 
@@ -990,6 +1093,15 @@ struct ShooterPrototypeView: View {
                 .frame(width: playWidth, height: playHeight)
                 .shadow(color: .black.opacity(0.32), radius: 20, x: 0, y: 12)
 
+                if channelColumnCount != nil {
+                    PuzzleWallsView(
+                        leftWallX: leftWallX,
+                        rightWallX: rightWallX,
+                        playWidth: playWidth,
+                        playHeight: playHeight
+                    )
+                }
+
                 Capsule()
                     .fill(
                         LinearGradient(
@@ -998,7 +1110,7 @@ struct ShooterPrototypeView: View {
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: playWidth - 28, height: 5)
+                    .frame(width: max(channelWidth - 28, 20), height: 5)
                     .shadow(color: .cyan.opacity(0.25), radius: 5, x: 0, y: 0)
                     .position(x: playWidth / 2, y: ceilingY)
                 
@@ -1078,20 +1190,18 @@ struct ShooterPrototypeView: View {
                     .rotationEffect(.degrees(aimAngle + 90))
                     .position(launcherPosition)
                 
-                if isPuzzleMode {
-                    Button {
-                        puzzleAimerEnabled.toggle()
-                    } label: {
-                        Image(systemName: puzzleAimerEnabled ? "scope" : "scope")
-                            .font(.title3.bold())
-                            .foregroundStyle(puzzleAimerEnabled ? .cyan : .white.opacity(0.4))
-                            .frame(width: 36, height: 36)
-                            .background(Circle().fill(.black.opacity(0.55)))
-                            .overlay {
-                                Circle().stroke(.white.opacity(0.18), lineWidth: 1)
-                            }
-                    }
-                    .position(x: playWidth - 28, y: launcherY - 60)
+                // Puzzle aimer is chosen once at the start of the run and locked (no in-game toggle).
+
+                // Puzzle mode: live shots / par / stars bar in the empty strip at the bottom of the board.
+                if isPuzzleMode, let puzzle = puzzleLevel {
+                    PuzzleParBarView(
+                        shotsUsed: puzzleShotsUsed,
+                        parShots: puzzle.parShots,
+                        threeStarShots: puzzle.threeStarShots ?? puzzle.parShots,
+                        twoStarShots: puzzle.twoStarShots,
+                        isFinished: isLevelClear
+                    )
+                    .position(x: playWidth / 2, y: playHeight - 20 * scale)
                 }
 
                 if movingOrb == nil && !isGameOver && !isLevelClear {
@@ -1123,22 +1233,8 @@ struct ShooterPrototypeView: View {
                             updateMovingOrb()
                         }
 
-            if isPuzzleMode, let puzzle = puzzleLevel {
-                Text(puzzle.chamberName)
-                    .font(.system(size: 28, weight: .black, design: .rounded))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(.black.opacity(0.58))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(.white.opacity(0.15), lineWidth: 1)
-                            }
-                    )
-                    .padding(.horizontal, 18)
-            }
+            // Puzzle chamber name now lives in the top HUD (danger bar), so the
+            // puzzle screen uses the exact same layout as regular mode.
 
                         Spacer()
         }
@@ -1147,11 +1243,23 @@ struct ShooterPrototypeView: View {
             if isPuzzleFailed, let puzzle = puzzleLevel {
                 PuzzleFailedOverlayView(
                     chamberName: puzzle.chamberName,
-                    onRetry: {
-                        isPuzzleFailed = false
-                        resetGame()
+                    runScore: PuzzleRun.shared.score,
+                    onStartOver: {
+                        // Losing a level ends the run: submit it, then reset and restart from the beginning.
+                        PuzzleRun.shared.submitToLeaderboard()
+                        PuzzleRun.shared.score = 0
+                        let start = PuzzleRun.startingLevel()
+                        if let start, start.id != puzzle.id {
+                            onNextPuzzle?(start)
+                        } else {
+                            isPuzzleFailed = false
+                            resetGame()
+                        }
                     },
-                    onBackToMenu: onBackToMenu
+                    onBackToMenu: {
+                        PuzzleRun.shared.submitToLeaderboard()
+                        onBackToMenu()
+                    }
                 )
             } else if isLevelClear {
                 if isPuzzleMode, let puzzle = puzzleLevel {
@@ -1159,8 +1267,14 @@ struct ShooterPrototypeView: View {
                         chamberName: puzzle.chamberName,
                         shotsUsed: puzzleShotsUsed,
                         parShots: puzzle.parShots,
+                        threeStarShots: puzzle.threeStarShots ?? puzzle.parShots,
                         twoStarShots: puzzle.twoStarShots,
                         oneStarShots: puzzle.oneStarShots,
+                        stars: puzzleLevelStars,
+                        starPoints: puzzleLevelStarPoints,
+                        aimerBonus: puzzleLevelAimerBonus,
+                        usedAimer: puzzleUsedAimer,
+                        runScore: PuzzleRun.shared.score,
                         hasNextLevel: PuzzleLevels.all.first { $0.id == puzzle.id + 1 } != nil,
                         onNextLevel: {
                             if puzzle.id == 6 {
@@ -1170,7 +1284,10 @@ struct ShooterPrototypeView: View {
                                 onNextPuzzle?(nextPuzzle)
                             }
                         },
-                        onBackToMenu: onBackToMenu
+                        onBackToMenu: {
+                            PuzzleRun.shared.submitToLeaderboard()
+                            onBackToMenu()
+                        }
                     )
                 } else {
                     LevelCompleteOverlayView(
@@ -1261,6 +1378,9 @@ struct ShooterPrototypeView: View {
     private func resetGame() {
         isPuzzleMode = puzzleLevel != nil
             puzzleShotsUsed = 0
+        puzzleUsedAimer = false
+        isPuzzleFailed = false
+        puzzleAimerEnabled = PuzzleRun.shared.aimerEnabled   // locked for the whole run
         movingOrb = nil
         stuckOrbs = []
         fallingOrbs = []
@@ -1374,14 +1494,23 @@ struct ShooterPrototypeView: View {
     private func loadPuzzleLevel(_ puzzle: PuzzleLevel) {
         let rowSpacing = orbSize * 0.82
         let colSpacing = orbSize * 0.92
-        let maxColumnCount = 8
+        let maxColumnCount = puzzle.columns ?? 8
         let fullRowWidth = orbSize + CGFloat(maxColumnCount - 1) * colSpacing
         let startY = ceilingY + orbSize / 2
         let fullRowStartX = (playWidth - fullRowWidth) / 2 + orbSize / 2
 
         for (rowIndex, row) in puzzle.grid.enumerated() {
             let rowOffset: CGFloat = rowIndex.isMultiple(of: 2) ? 0 : colSpacing / 2
-            for (colIndex, type) in row.enumerated() {
+            // Walled levels (columns set): even rows hold maxColumnCount orbs, odd rows one fewer,
+            // and extra entries are ignored so an orb can never be placed inside a wall.
+            // Levels without walls load every entry exactly as written.
+            let maxItemsInRow: Int
+            if puzzle.columns != nil {
+                maxItemsInRow = rowIndex.isMultiple(of: 2) ? maxColumnCount : maxColumnCount - 1
+            } else {
+                maxItemsInRow = row.count
+            }
+            for (colIndex, type) in row.prefix(maxItemsInRow).enumerated() {
                 guard let type = type else { continue }
                 let position = CGPoint(
                     x: fullRowStartX + rowOffset + CGFloat(colIndex) * colSpacing,
@@ -1397,6 +1526,8 @@ struct ShooterPrototypeView: View {
         }
         if puzzle.shotQueue.count > 1 {
             nextType = puzzle.shotQueue[1]
+        } else if let firstShot = puzzle.shotQueue.first {
+            nextType = firstShot
         }
     }
 
@@ -1419,14 +1550,14 @@ struct ShooterPrototypeView: View {
             position.x += velocity.dx
             position.y += velocity.dy
 
-            if position.x <= radius {
-                position.x = radius
+            if position.x <= leftWallX + radius {
+                position.x = leftWallX + radius
                 velocity.dx *= -1
                 points.append(position)
             }
 
-            if position.x >= playWidth - radius {
-                position.x = playWidth - radius
+            if position.x >= rightWallX - radius {
+                position.x = rightWallX - radius
                 velocity.dx *= -1
                 points.append(position)
             }
@@ -1475,6 +1606,7 @@ struct ShooterPrototypeView: View {
 
         SoundManager.shared.play("orb_launch")
         if isAimerEnabled && !isPuzzleMode { usedAimer = true }
+        if isPuzzleMode && puzzleAimerEnabled { puzzleUsedAimer = true }
         if !isPuzzleMode { shotsFiredThisLevel += 1 }
 
         aimAngle = lastStableAimAngle
@@ -1501,13 +1633,13 @@ struct ShooterPrototypeView: View {
 
         let radius = orbSize / 2
 
-        if orb.position.x <= radius {
-            orb.position.x = radius
+        if orb.position.x <= leftWallX + radius {
+            orb.position.x = leftWallX + radius
             orb.velocity.dx *= -1
         }
 
-        if orb.position.x >= playWidth - radius {
-            orb.position.x = playWidth - radius
+        if orb.position.x >= rightWallX - radius {
+            orb.position.x = rightWallX - radius
             orb.velocity.dx *= -1
         }
 
@@ -1592,18 +1724,24 @@ struct ShooterPrototypeView: View {
             }
         }
 
+        // Count every puzzle shot, including the one that clears the board,
+        // so "shots used" matches the number of orbs actually fired.
+        if isPuzzleMode {
+            puzzleShotsUsed += 1
+        }
+
         checkLevelClear()
         checkGameOver()
 
         if !isLevelClear && !isGameOver {
             if isPuzzleMode, let puzzle = puzzleLevel {
-                puzzleShotsUsed += 1
-                let nextIndex = puzzleShotsUsed + 1
-                if puzzleShotsUsed >= puzzle.shotQueue.count && !isLevelClear {
+                if puzzleShotsUsed >= puzzle.shotQueue.count {
                     isPuzzleFailed = true
                 } else {
-                    currentType = nextIndex < puzzle.shotQueue.count ? puzzle.shotQueue[puzzleShotsUsed] : nextType
-                    nextType = nextIndex + 1 < puzzle.shotQueue.count ? puzzle.shotQueue[nextIndex] : randomOrbForCurrentMode()
+                    // Always take the real queued shot — the last shot is never random.
+                    currentType = puzzle.shotQueue[puzzleShotsUsed]
+                    let nextIndex = puzzleShotsUsed + 1
+                    nextType = nextIndex < puzzle.shotQueue.count ? puzzle.shotQueue[nextIndex] : currentType
                 }
             } else {
                 currentType = nextType
@@ -1614,6 +1752,7 @@ struct ShooterPrototypeView: View {
 
     private func activatePowerUp(_ powerUp: ActivePowerUp) {
         guard movingOrb == nil && !isGameOver && !isLevelClear else { return }
+        guard !isPuzzleMode else { return }   // power-ups are not allowed in puzzles
 
         switch powerUp {
         case .bomb:
@@ -1743,11 +1882,10 @@ struct ShooterPrototypeView: View {
     private func checkLevelClear() {
         if stuckOrbs.isEmpty && !isLevelClear {
             SoundManager.shared.play("level_complete")
-            showAchievementUnlocks(
-                AchievementManager.shared.recordLevelComplete(
-                    difficulty: difficulty,
-                    isAimerEnabled: isAimerEnabled
-                )
+            // Collect every unlock from this clear and show them as one queue of toasts.
+            var unlockedTitles = AchievementManager.shared.recordLevelComplete(
+                difficulty: difficulty,
+                isAimerEnabled: isAimerEnabled
             )
 
             if !isPuzzleMode {
@@ -1761,19 +1899,42 @@ struct ShooterPrototypeView: View {
                 }
             }
 
+            // Puzzle scoring: points by stars, +100 if the aimer was never used this level.
+            if isPuzzleMode, let puzzle = puzzleLevel {
+                let threeStar = puzzle.threeStarShots ?? puzzle.parShots
+                if puzzleShotsUsed <= threeStar {
+                    puzzleLevelStars = 3
+                } else if puzzleShotsUsed <= puzzle.twoStarShots {
+                    puzzleLevelStars = 2
+                } else {
+                    puzzleLevelStars = 1
+                }
+                puzzleLevelStarPoints = PuzzleRun.starPoints(for: puzzleLevelStars)
+                puzzleLevelAimerBonus = puzzleUsedAimer ? 0 : PuzzleRun.noAimerBonus
+                PuzzleRun.shared.score += puzzleLevelStarPoints + puzzleLevelAimerBonus
+
+                unlockedTitles += AchievementManager.shared.recordPuzzleLevelComplete(
+                    level: puzzle,
+                    stars: puzzleLevelStars,
+                    aimerEnabled: PuzzleRun.shared.aimerEnabled,
+                    runScore: PuzzleRun.shared.score
+                )
+            }
+
             isLevelClear = true
             movingOrb = nil
             lastCompletedLevelPoints = levelPoints
             totalPoints += 100
-            showAchievementUnlocks(
-                AchievementManager.shared.recordScore(totalPoints: totalPoints)
-            )
+            unlockedTitles += AchievementManager.shared.recordScore(totalPoints: totalPoints)
+            showAchievementUnlocks(unlockedTitles)
         }
     }
 
     private func checkGameOver() {
         if stuckOrbs.contains(where: { $0.position.y >= dangerLineY }) {
             isGameOver = true
+            // In puzzle mode, reaching the danger line counts as losing the level.
+            if isPuzzleMode { isPuzzleFailed = true }
         }
     }
 
@@ -1944,7 +2105,7 @@ struct ShooterPrototypeView: View {
     private func gridSlots(rowLimit: Int) -> [CGPoint] {
         let rowSpacing = orbSize * 0.82
         let colSpacing = orbSize * 0.92
-        let maxColumnCount = difficulty.columnCount
+        let maxColumnCount = puzzleLevel?.columns ?? difficulty.columnCount
         let fullRowWidth = orbSize + CGFloat(maxColumnCount - 1) * colSpacing
         let fullRowStartX = (playWidth - fullRowWidth) / 2 + orbSize / 2
         let startY = ceilingY + orbSize / 2
@@ -2522,6 +2683,8 @@ struct GameTopHUDView: View {
     let onRules: () -> Void
     let onPowerUp: () -> Void
     var onCounterHelp: (() -> Void)? = nil
+    var chamberName: String? = nil   // Puzzle mode only — shown on the right of the danger bar
+    var puzzleLevelNumber: Int? = nil   // Puzzle mode only — hides score and power-ups
 
     private var dangerRatio: CGFloat {
         guard maxMisses > 0 else { return 0 }
@@ -2543,28 +2706,37 @@ struct GameTopHUDView: View {
                 }
 
                 HStack(spacing: 8) {
-                    HUDLevelDifficultyCardView(
-                        levelNumber: levelNumber,
-                        difficulty: difficulty
-                    )
+                    if let puzzleLevelNumber {
+                        // Puzzle mode: no running score and no power-ups — just the level.
+                        HUDLevelDifficultyCardView(
+                            levelNumber: puzzleLevelNumber,
+                            difficulty: difficulty,
+                            subtitle: puzzleLevelNumber <= 6 ? "TUTORIAL" : "PUZZLE"
+                        )
+                    } else {
+                        HUDLevelDifficultyCardView(
+                            levelNumber: levelNumber,
+                            difficulty: difficulty
+                        )
 
-                    HUDCardView(
-                        label: "SCORE",
-                        value: "\(score)"
-                    )
+                        HUDCardView(
+                            label: "SCORE",
+                            value: "\(score)"
+                        )
 
-                    HUDPowerUpCardView(
-                        activePowerUp: activePowerUp,
-                        frozenType: frozenType,
-                        frozenShotsRemaining: frozenShotsRemaining,
-                        action: onPowerUp
-                    )
+                        HUDPowerUpCardView(
+                            activePowerUp: activePowerUp,
+                            frozenType: frozenType,
+                            frozenShotsRemaining: frozenShotsRemaining,
+                            action: onPowerUp
+                        )
+                    }
                 }
 
                 HStack(spacing: 6) {
                     if let onCounterHelp {
                         Button(action: onCounterHelp) {
-                            Image(systemName: "bolt.questionmark.fill")
+                            Image(systemName: "bolt.circle.fill")
                                 .font(.title3.bold())
                                 .foregroundStyle(.orange)
                                 .frame(width: 42, height: 42)
@@ -2601,6 +2773,18 @@ struct GameTopHUDView: View {
                 .padding(.leading, 12)
                 .animation(.easeInOut(duration: 0.25), value: dangerRatio)
             }
+            .overlay(alignment: .trailing) {
+                if let chamberName {
+                    Text(chamberName)
+                        .font(.system(size: 15, weight: .black, design: .rounded))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .shadow(color: .black.opacity(0.6), radius: 3, x: 0, y: 1)
+                        .padding(.leading, 110)   // keeps clear of the DANGER label
+                        .padding(.trailing, 14)
+                }
+            }
         }
     }
 }
@@ -2608,6 +2792,7 @@ struct GameTopHUDView: View {
 struct HUDLevelDifficultyCardView: View {
     let levelNumber: Int
     let difficulty: Difficulty
+    var subtitle: String? = nil   // overrides the difficulty label (puzzle mode)
 
     var body: some View {
         VStack(spacing: 2) {
@@ -2619,9 +2804,9 @@ struct HUDLevelDifficultyCardView: View {
                 .font(.system(size: 18, weight: .black, design: .rounded))
                 .foregroundStyle(.white)
 
-            Text(difficulty.displayName.uppercased())
+            Text(subtitle ?? difficulty.displayName.uppercased())
                 .font(.system(size: 8, weight: .black, design: .rounded))
-                .foregroundStyle(difficulty == .hard ? .orange : .white.opacity(0.68))
+                .foregroundStyle(subtitle == nil && difficulty == .hard ? .orange : .white.opacity(0.68))
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
         }
@@ -2743,7 +2928,15 @@ struct NextOrbBoardPreviewView: View {
                 .foregroundStyle(.white.opacity(0.86))
                 .tracking(1)
 
-            OrbView(type: nextType, size: orbSize * 0.92)
+            if let shotsRemaining, shotsRemaining <= 1 {
+                // Puzzle mode: the current shot is the last one, so there is no next orb.
+                Text("LAST")
+                    .font(.system(size: 10, weight: .black, design: .rounded))
+                    .foregroundStyle(.red)
+                    .frame(width: orbSize * 0.92, height: orbSize * 0.92)
+            } else {
+                OrbView(type: nextType, size: orbSize * 0.92)
+            }
 
             if let shotsRemaining {
                 Text("\(shotsRemaining) left")
@@ -2763,6 +2956,116 @@ struct NextOrbBoardPreviewView: View {
                 }
         )
         .shadow(color: .black.opacity(0.28), radius: 7, x: 0, y: 4)
+        .allowsHitTesting(false)
+    }
+}
+
+struct PuzzleParBarView: View {
+    let shotsUsed: Int
+    let parShots: Int
+    let threeStarShots: Int
+    let twoStarShots: Int
+    let isFinished: Bool
+
+    // While playing: the best rating still possible if the NEXT shot clears the board.
+    // Once cleared: the rating actually earned.
+    private var stars: Int {
+        if isFinished {
+            if shotsUsed <= threeStarShots { return 3 }
+            if shotsUsed <= twoStarShots { return 2 }
+            return 1
+        }
+        if shotsUsed < threeStarShots { return 3 }
+        if shotsUsed < twoStarShots { return 2 }
+        return 1
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("Shots \(shotsUsed)")
+                .foregroundStyle(.white)
+
+            Text("·")
+                .foregroundStyle(.white.opacity(0.5))
+
+            Text("Par \(parShots)")
+                .foregroundStyle(shotsUsed <= parShots ? .white : .orange)
+
+            HStack(spacing: 2) {
+                ForEach(0..<3, id: \.self) { index in
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(index < stars ? Color.yellow : Color.white.opacity(0.22))
+                        .scaleEffect(index < stars ? 1.0 : 0.85)
+                }
+            }
+            .animation(.easeInOut(duration: 0.3), value: stars)
+        }
+        .font(.system(size: 13, weight: .black, design: .rounded))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(.black.opacity(0.55))
+                .overlay {
+                    Capsule().stroke(.white.opacity(0.16), lineWidth: 1)
+                }
+        )
+        .allowsHitTesting(false)
+    }
+}
+
+struct PuzzleWallsView: View {
+    let leftWallX: CGFloat
+    let rightWallX: CGFloat
+    let playWidth: CGFloat
+    let playHeight: CGFloat
+
+    private let wallFill = LinearGradient(
+        colors: [
+            Color(red: 0.16, green: 0.17, blue: 0.24).opacity(0.92),
+            Color(red: 0.08, green: 0.09, blue: 0.14).opacity(0.95)
+        ],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    private let edgeGlow = LinearGradient(
+        colors: [.white.opacity(0.55), .cyan.opacity(0.35), .white.opacity(0.15)],
+        startPoint: .top,
+        endPoint: .bottom
+    )
+
+    var body: some View {
+        let rightWidth = playWidth - rightWallX
+
+        ZStack {
+            if leftWallX > 0 {
+                Rectangle()
+                    .fill(wallFill)
+                    .frame(width: leftWallX, height: playHeight)
+                    .position(x: leftWallX / 2, y: playHeight / 2)
+
+                Rectangle()
+                    .fill(edgeGlow)
+                    .frame(width: 3, height: playHeight)
+                    .shadow(color: .cyan.opacity(0.4), radius: 4, x: 0, y: 0)
+                    .position(x: leftWallX - 1.5, y: playHeight / 2)
+            }
+
+            if rightWidth > 0 {
+                Rectangle()
+                    .fill(wallFill)
+                    .frame(width: rightWidth, height: playHeight)
+                    .position(x: rightWallX + rightWidth / 2, y: playHeight / 2)
+
+                Rectangle()
+                    .fill(edgeGlow)
+                    .frame(width: 3, height: playHeight)
+                    .shadow(color: .cyan.opacity(0.4), radius: 4, x: 0, y: 0)
+                    .position(x: rightWallX + 1.5, y: playHeight / 2)
+            }
+        }
+        .frame(width: playWidth, height: playHeight)
         .allowsHitTesting(false)
     }
 }

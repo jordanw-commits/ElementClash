@@ -14,13 +14,181 @@ struct MainMenuView: View {
     @State private var unlockedAchievementTitle: String?
     @State private var showPuzzleMode = false
     @State private var showLeaderboard = false
+    @State private var showPuzzleStart = false     // aimer question, then straight into the levels
+    @State private var showPuzzleLockedAlert = false
 
     @AppStorage("totalPoints") private var totalPoints: Int = 0
     @AppStorage("bombOrbCount") private var bombOrbCount: Int = 0
     @AppStorage("typeFreezeCount") private var typeFreezeCount: Int = 0
     @AppStorage("typeEraseCount") private var typeEraseCount: Int = 0
 
+    // Full-art menu (ChatGPT render). Add the image to Assets as "menu_full".
+    // If the asset is missing, the old built-in layout is used instead.
+    private var hasRenderedMenu: Bool { UIImage(named: MenuArt.imageName) != nil }
+
     var body: some View {
+        ZStack {
+            if hasRenderedMenu {
+                renderedMenu
+            } else {
+                legacyMenu
+            }
+        }
+        .overlay(alignment: .top) {
+            if let unlockedAchievementTitle {
+                StoreAchievementToastView(title: unlockedAchievementTitle)
+                    .padding(.top, 18)
+                    .padding(.horizontal, 24)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(20)
+            }
+        }
+        .sheet(isPresented: $showHowToPlay) {
+            HowToPlayView()
+        }
+        .sheet(isPresented: $showStore) {
+            StoreView(
+                totalPoints: $totalPoints,
+                bombOrbCount: $bombOrbCount,
+                typeFreezeCount: $typeFreezeCount,
+                typeEraseCount: $typeEraseCount
+            )
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
+        .sheet(isPresented: $showAchievements) {
+            AchievementsView()
+        }
+        .sheet(isPresented: $showLeaderboard) {
+            LeaderboardView()
+        }
+        .sheet(isPresented: $showPuzzleStart) {
+            PuzzleStartView {
+                showPuzzleStart = false
+                onSelectPuzzle?(nil)
+            }
+        }
+        // Game-styled "Locked" popup (replaces the system alert)
+        .overlay {
+            if showPuzzleLockedAlert {
+                LockedPopupView(
+                    title: "Locked",
+                    message: "Puzzle Mode unlocks when Counter Hard does.",
+                    goalText: "Win a Counter Medium game",
+                    progress: min(UnlockManager.shared.counterMediumWins, 1),
+                    goal: 1
+                ) {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        showPuzzleLockedAlert = false
+                    }
+                }
+                .transition(.opacity)
+                .zIndex(30)
+            }
+        }
+        .sheet(item: $selectedModeForDifficulty) { mode in
+            DifficultySelectionView(
+                mode: mode,
+                isAimerEnabled: $isAimerEnabled
+            ) { difficulty in
+                selectedModeForDifficulty = nil
+                onSelectMode(mode, difficulty, isAimerEnabled)
+            }
+        }
+        .onAppear {
+            GameCenterManager.shared.authenticate()
+        }
+    }
+
+
+    // MARK: - Rendered (full-art) menu
+
+    private var renderedMenu: some View {
+        GeometryReader { geo in
+            let scale = MenuArt.scale(for: geo.size)
+            let artSize = CGSize(width: MenuArt.size.width * scale, height: MenuArt.size.height * scale)
+            let origin = CGPoint(x: (geo.size.width - artSize.width) / 2,
+                                 y: (geo.size.height - artSize.height) / 2)
+
+            ZStack(alignment: .topLeading) {
+                // Blurred fill behind the art, only visible on wide screens (iPad) where the art is fitted.
+                Image(MenuArt.imageName)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+                    .blur(radius: 24)
+                    .overlay(Color.black.opacity(0.30))
+
+                Image(MenuArt.imageName)
+                    .resizable()
+                    .frame(width: artSize.width, height: artSize.height)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+
+                // Tap areas over the painted buttons
+                MenuHotspot(rect: MenuArt.classic, scale: scale, origin: origin, label: "Classic") {
+                    selectedModeForDifficulty = .classic
+                }
+                MenuHotspot(rect: MenuArt.counter, scale: scale, origin: origin, label: "Counter Mode") {
+                    selectedModeForDifficulty = .counter
+                }
+                MenuHotspot(rect: MenuArt.puzzle, scale: scale, origin: origin, label: "Puzzle Mode") {
+                    if UnlockManager.shared.puzzleModeUnlocked {
+                        showPuzzleStart = true
+                    } else {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            showPuzzleLockedAlert = true
+                        }
+                    }
+                }
+                MenuHotspot(rect: MenuArt.howToPlay, scale: scale, origin: origin, cornerRadius: 18, label: "How to Play") {
+                    showHowToPlay = true
+                }
+                MenuHotspot(rect: MenuArt.settings, scale: scale, origin: origin, cornerRadius: 18, label: "Settings") {
+                    showSettings = true
+                }
+                MenuHotspot(rect: MenuArt.store, scale: scale, origin: origin, cornerRadius: 18, label: "Store") {
+                    showStore = true
+                }
+                MenuHotspot(rect: MenuArt.achievements, scale: scale, origin: origin, cornerRadius: 18, label: "Achievements") {
+                    showAchievements = true
+                }
+
+                // Lock shade over the painted Puzzle card until it's unlocked
+                if !UnlockManager.shared.puzzleModeUnlocked {
+                    MenuLockShade(rect: MenuArt.puzzle, scale: scale, origin: origin)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .ignoresSafeArea()
+        // The render has no Leaderboard tile, so it sits in the top-right corner.
+        .overlay(alignment: .topTrailing) {
+            Button {
+                showLeaderboard = true
+            } label: {
+                Image(systemName: "crown.fill")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(.yellow)
+                    .frame(width: 42, height: 42)
+                    .background(
+                        Circle()
+                            .fill(Color(red: 0.06, green: 0.12, blue: 0.30).opacity(0.85))
+                            .overlay(Circle().stroke(.cyan.opacity(0.55), lineWidth: 1.5))
+                            .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 3)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Leaderboard")
+            .padding(.trailing, 8)
+            .padding(.top, 4)
+        }
+    }
+
+    // MARK: - Legacy (built-in) menu, used only if "menu_full" isn't in Assets
+
+    private var legacyMenu: some View {
         ZStack {
             Image("menu_background")
                 .resizable()
@@ -110,10 +278,17 @@ struct MainMenuView: View {
                             showLeaderboard = true
                         }
 
-                        MenuSmallButton(title: "Puzzle Mode\n(Coming Soon)", symbol: "puzzlepiece.fill", compact: true, style: .highlight) {
+                        // Puzzle Mode unlocks together with Counter Hard.
+                        if UnlockManager.shared.puzzleModeUnlocked {
+                            MenuSmallButton(title: "Puzzle Mode", symbol: "puzzlepiece.fill", compact: true, style: .highlight) {
+                                showPuzzleStart = true
+                            }
+                        } else {
+                            MenuSmallButton(title: "Puzzle Mode\n(Locked)", symbol: "lock.fill", compact: true, style: .highlight) {
+                                showPuzzleLockedAlert = true
+                            }
+                            .opacity(0.55)
                         }
-                        .opacity(0.45)
-                        .allowsHitTesting(false)
                     }
                 }
                 .padding(.horizontal, 28)
@@ -122,47 +297,396 @@ struct MainMenuView: View {
                 Spacer()
             }
         }
-        .overlay(alignment: .top) {
-            if let unlockedAchievementTitle {
-                StoreAchievementToastView(title: unlockedAchievementTitle)
-                    .padding(.top, 18)
-                    .padding(.horizontal, 24)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(20)
-            }
+    }
+}
+
+// MARK: - Full-art menu layout
+
+// Button positions measured in pixels on the 850 x 1850 render.
+// If the art is replaced with a new render, re-measure these rects.
+enum MenuArt {
+    static let imageName = "menu_full"
+    static let size = CGSize(width: 850, height: 1850)
+
+    static let classic      = CGRect(x: 20,  y: 510,  width: 270, height: 264)
+    static let counter      = CGRect(x: 298, y: 510,  width: 254, height: 264)
+    static let puzzle       = CGRect(x: 564, y: 510,  width: 268, height: 264)
+    static let howToPlay    = CGRect(x: 90,  y: 1366, width: 324, height: 124)
+    static let settings     = CGRect(x: 436, y: 1366, width: 326, height: 124)
+    static let store        = CGRect(x: 90,  y: 1501, width: 324, height: 123)
+    static let achievements = CGRect(x: 436, y: 1501, width: 326, height: 123)
+
+    // Center of the painted puzzle-piece orb on the Puzzle card
+    static let puzzleOrbCenter = CGPoint(x: 697, y: 540)
+
+    // Everything from the title down to the bottom tiles must stay on screen.
+    private static let mustShow = CGRect(x: 15, y: 150, width: 820, height: 1540)
+
+    // Fill the screen when that keeps all the buttons visible (iPhones);
+    // otherwise fit the whole image with a blurred fill behind it (iPad, very short screens).
+    static func scale(for screen: CGSize) -> CGFloat {
+        guard screen.width > 0, screen.height > 0 else { return 1 }
+        let sx = screen.width / size.width
+        let sy = screen.height / size.height
+        let fill = max(sx, sy)
+        let visibleW = screen.width / fill
+        let visibleH = screen.height / fill
+        let visible = CGRect(x: (size.width - visibleW) / 2,
+                             y: (size.height - visibleH) / 2,
+                             width: visibleW, height: visibleH)
+        return visible.contains(mustShow) ? fill : min(sx, sy)
+    }
+
+    static func frame(_ rect: CGRect, scale: CGFloat, origin: CGPoint) -> CGRect {
+        CGRect(x: origin.x + rect.minX * scale,
+               y: origin.y + rect.minY * scale,
+               width: rect.width * scale,
+               height: rect.height * scale)
+    }
+}
+
+// Invisible button over a painted button. Flashes white while pressed.
+struct MenuHotspot: View {
+    let rect: CGRect
+    let scale: CGFloat
+    let origin: CGPoint
+    var cornerRadius: CGFloat = 24
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        let frame = MenuArt.frame(rect, scale: scale, origin: origin)
+        let radius = cornerRadius * scale * 2
+
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: radius)
+                .fill(Color.clear)
+                .contentShape(RoundedRectangle(cornerRadius: radius))
         }
-        .sheet(isPresented: $showHowToPlay) {
-            HowToPlayView()
-        }
-        .sheet(isPresented: $showStore) {
-            StoreView(
-                totalPoints: $totalPoints,
-                bombOrbCount: $bombOrbCount,
-                typeFreezeCount: $typeFreezeCount,
-                typeEraseCount: $typeEraseCount
+        .buttonStyle(MenuHotspotPressStyle(cornerRadius: radius))
+        .frame(width: frame.width, height: frame.height)
+        .position(x: frame.midX, y: frame.midY)
+        .accessibilityLabel(label)
+    }
+}
+
+struct MenuHotspotPressStyle: ButtonStyle {
+    let cornerRadius: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.white.opacity(configuration.isPressed ? 0.22 : 0))
             )
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Locked styling (matches the painted menu art)
+
+enum LockedStyle {
+    static let gold = LinearGradient(
+        colors: [Color(red: 1.00, green: 0.94, blue: 0.58), Color(red: 1.00, green: 0.72, blue: 0.20)],
+        startPoint: .top, endPoint: .bottom
+    )
+    static let goldEdge = Color(red: 0.35, green: 0.14, blue: 0.02)
+    static let purpleFill = LinearGradient(
+        colors: [Color(red: 0.42, green: 0.16, blue: 0.72), Color(red: 0.17, green: 0.06, blue: 0.36)],
+        startPoint: .top, endPoint: .bottom
+    )
+    static let purpleEdge = LinearGradient(
+        colors: [Color(red: 0.90, green: 0.68, blue: 1.00), Color(red: 0.58, green: 0.28, blue: 0.98)],
+        startPoint: .top, endPoint: .bottom
+    )
+}
+
+// Glossy purple orb with a gold lock, like the orb icons on the mode cards.
+struct LockOrbBadge: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(RadialGradient(
+                    colors: [Color(red: 0.62, green: 0.32, blue: 0.95), Color(red: 0.24, green: 0.07, blue: 0.48)],
+                    center: .init(x: 0.4, y: 0.35), startRadius: 0, endRadius: size * 0.6
+                ))
+            Circle()
+                .stroke(LockedStyle.gold, lineWidth: max(2, size * 0.045))
+            Ellipse()
+                .fill(.white.opacity(0.32))
+                .frame(width: size * 0.55, height: size * 0.24)
+                .offset(y: -size * 0.27)
+                .blur(radius: size * 0.03)
+            Image(systemName: "lock.fill")
+                .font(.system(size: size * 0.42, weight: .black))
+                .foregroundStyle(LockedStyle.gold)
+                .shadow(color: LockedStyle.goldEdge, radius: 0, x: 0, y: max(1, size * 0.025))
+                .shadow(color: .black.opacity(0.45), radius: size * 0.05, x: 0, y: size * 0.03)
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
+        .frame(width: size, height: size)
+        .shadow(color: Color.purple.opacity(0.7), radius: size * 0.15)
+    }
+}
+
+// Dims the painted Puzzle card, puts a lock orb over its icon and a LOCKED ribbon on the bottom edge.
+// Taps pass through to the hotspot underneath.
+struct MenuLockShade: View {
+    let rect: CGRect
+    let scale: CGFloat
+    let origin: CGPoint
+
+    var body: some View {
+        let frame = MenuArt.frame(rect, scale: scale, origin: origin)
+        let orb = CGPoint(x: origin.x + MenuArt.puzzleOrbCenter.x * scale,
+                          y: origin.y + MenuArt.puzzleOrbCenter.y * scale)
+        let unit = scale * 2   // ~1pt on a standard iPhone
+
+        ZStack {
+            RoundedRectangle(cornerRadius: 24 * unit)
+                .fill(.black.opacity(0.5))
+                .frame(width: frame.width, height: frame.height)
+                .position(x: frame.midX, y: frame.midY)
+
+            LockOrbBadge(size: 52 * unit)
+                .position(orb)
+
+            Text("LOCKED")
+                .font(.system(size: 13 * unit, weight: .black, design: .rounded))
+                .tracking(1.2)
+                .foregroundStyle(LockedStyle.gold)
+                .shadow(color: LockedStyle.goldEdge, radius: 0, x: 0, y: 1.5)
+                .padding(.horizontal, 14 * unit)
+                .padding(.vertical, 5 * unit)
+                .background(
+                    Capsule()
+                        .fill(LockedStyle.purpleFill)
+                        .overlay(Capsule().stroke(LockedStyle.gold, lineWidth: 2))
+                        .shadow(color: .black.opacity(0.5), radius: 4, x: 0, y: 2)
+                )
+                .position(x: frame.midX, y: frame.maxY)
         }
-        .sheet(isPresented: $showAchievements) {
-            AchievementsView()
-        }
-        .sheet(isPresented: $showLeaderboard) {
-            LeaderboardView()
-        }
-        .sheet(item: $selectedModeForDifficulty) { mode in
-            DifficultySelectionView(
-                mode: mode,
-                isAimerEnabled: $isAimerEnabled
-            ) { difficulty in
-                selectedModeForDifficulty = nil
-                onSelectMode(mode, difficulty, isAimerEnabled)
+        .allowsHitTesting(false)
+    }
+}
+
+// Game-styled popup for locked content: purple card, gold title, progress toward the unlock, blue button.
+struct LockedPopupView: View {
+    let title: String
+    let message: String
+    let goalText: String
+    let progress: Int
+    let goal: Int
+    let onDismiss: () -> Void
+
+    @State private var appeared = false
+
+    private var fraction: CGFloat {
+        goal > 0 ? min(1, CGFloat(progress) / CGFloat(goal)) : 0
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 14) {
+                Text(title)
+                    .font(.system(size: 36, weight: .black, design: .rounded))
+                    .foregroundStyle(LockedStyle.gold)
+                    .shadow(color: LockedStyle.goldEdge, radius: 0, x: 0, y: 3)
+                    .shadow(color: .black.opacity(0.5), radius: 6, x: 0, y: 4)
+
+                Text(message)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Unlock progress
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bolt.fill")
+                            .font(.system(size: 14, weight: .black))
+                            .foregroundStyle(LockedStyle.gold)
+                        Text(goalText)
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                        Spacer(minLength: 6)
+                        Text("\(progress) / \(goal)")
+                            .font(.system(size: 15, weight: .black, design: .rounded))
+                            .foregroundStyle(LockedStyle.gold)
+                    }
+
+                    Capsule()
+                        .fill(.white.opacity(0.14))
+                        .frame(height: 9)
+                        .overlay(alignment: .leading) {
+                            GeometryReader { bar in
+                                Capsule()
+                                    .fill(LinearGradient(colors: [.orange, .yellow], startPoint: .leading, endPoint: .trailing))
+                                    .frame(width: bar.size.width * fraction)
+                            }
+                        }
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.black.opacity(0.32))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.14), lineWidth: 1))
+                )
+
+                Button(action: onDismiss) {
+                    Text("Got It")
+                        .font(.system(size: 20, weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.4), radius: 0, x: 0, y: 2)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(LinearGradient(
+                                    colors: [Color(red: 0.20, green: 0.58, blue: 1.00), Color(red: 0.05, green: 0.24, blue: 0.68)],
+                                    startPoint: .top, endPoint: .bottom
+                                ))
+                                .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.cyan.opacity(0.9), lineWidth: 2))
+                                .shadow(color: .cyan.opacity(0.45), radius: 8, x: 0, y: 0)
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 4)
             }
+            .padding(.horizontal, 22)
+            .padding(.top, 54)
+            .padding(.bottom, 22)
+            .frame(maxWidth: 330)
+            .background(
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(LockedStyle.purpleFill)
+                    .overlay(RoundedRectangle(cornerRadius: 28).stroke(LockedStyle.purpleEdge, lineWidth: 3))
+                    .shadow(color: Color.purple.opacity(0.65), radius: 20, x: 0, y: 0)
+            )
+            .overlay(alignment: .top) {
+                LockOrbBadge(size: 84)
+                    .offset(y: -42)
+            }
+            .padding(.horizontal, 30)
+            .scaleEffect(appeared ? 1 : 0.85)
+            .opacity(appeared ? 1 : 0)
         }
         .onAppear {
-            GameCenterManager.shared.authenticate()
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.72)) {
+                appeared = true
+            }
         }
+    }
+}
+
+// Puzzle Mode start: choose the aimer once for the whole run, then jump straight into the levels.
+struct PuzzleStartView: View {
+    let onStart: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var isAimerEnabled = PuzzleRun.shared.aimerEnabled
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.07, green: 0.08, blue: 0.16),
+                    Color(red: 0.12, green: 0.14, blue: 0.28),
+                    Color(red: 0.05, green: 0.07, blue: 0.13)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            OrbBackgroundView(floatAmount: -6)
+                .opacity(0.3)
+
+            VStack(spacing: 22) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Puzzle Mode")
+                            .font(.system(size: 34, weight: .black, design: .rounded))
+                            .foregroundStyle(.white)
+
+                        Text("Beat par for 3 stars. Lose a level and the run starts over.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+
+                    Spacer()
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title)
+                            .foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+
+                // Aimer is chosen once here and stays locked for the whole run.
+                Toggle(isOn: $isAimerEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Aimer")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Text(isAimerEnabled
+                             ? "Trajectory guide on for this run. No bonus."
+                             : "Aimer off for this run: +100 bonus every level.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.68))
+                    }
+                }
+                .tint(.cyan)
+                .padding(16)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(.white.opacity(0.10))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 20)
+                                .stroke(.white.opacity(0.14), lineWidth: 1)
+                        }
+                )
+                .padding(.horizontal, 24)
+
+                Text("The aimer can't be changed once the run starts.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.5))
+
+                Button {
+                    PuzzleRun.shared.aimerEnabled = isAimerEnabled
+                    onStart()
+                } label: {
+                    Text("Start")
+                        .font(.title3.bold())
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .foregroundStyle(.white)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20)
+                                .fill(LinearGradient(
+                                    colors: [Color(red: 0.08, green: 0.72, blue: 0.65), Color(red: 0.13, green: 0.77, blue: 0.37)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 24)
+
+                Spacer()
+            }
+        }
+        .presentationDetents([.medium])
     }
 }
 
@@ -1302,6 +1826,66 @@ struct AchievementsView: View {
                 description: "Complete 15 levels to unlock the ending comic",
                 progressText: UserDefaults.standard.bool(forKey: "achievementEndScene") ? "Unlocked" : "Locked",
                 isUnlocked: UserDefaults.standard.bool(forKey: "achievementEndScene")
+            )
+        ] + (showsPuzzleAchievements ? puzzleAchievements : [])
+    }
+
+    // Puzzle Mode is live, so its achievements always show.
+    private var showsPuzzleAchievements: Bool { true }
+
+    // MARK: - Puzzle Mode achievements
+
+    private var puzzleAchievements: [AchievementRowData] {
+        let defaults = UserDefaults.standard
+        let total = PuzzleLevels.all.count
+        let oneStar = AchievementManager.puzzleLevelsWith(atLeast: 1)
+        let twoStar = AchievementManager.puzzleLevelsWith(atLeast: 2)
+        let threeStar = AchievementManager.puzzleLevelsWith(atLeast: 3)
+
+        func done(_ key: String) -> Bool { defaults.bool(forKey: key) }
+
+        return [
+            AchievementRowData(
+                title: "Tutorial Graduate",
+                description: "Finish all 6 Puzzle Mode tutorials",
+                progressText: done("achievementPuzzleTutorials") ? "Unlocked" : "Locked",
+                isUnlocked: done("achievementPuzzleTutorials")
+            ),
+            AchievementRowData(
+                title: "Puzzle Solver",
+                description: "Finish the last puzzle level in a single run",
+                progressText: done("achievementPuzzleSolver") ? "Unlocked" : "Locked",
+                isUnlocked: done("achievementPuzzleSolver")
+            ),
+            AchievementRowData(
+                title: "Steady Hand",
+                description: "Finish Puzzle Mode with the aimer off",
+                progressText: done("achievementPuzzleNoAimer") ? "Unlocked" : "Locked",
+                isUnlocked: done("achievementPuzzleNoAimer")
+            ),
+            AchievementRowData(
+                title: "Star Collector I",
+                description: "Earn at least 1 star on every puzzle level",
+                progressText: "\(oneStar) / \(total)",
+                isUnlocked: done("achievementPuzzleStars1")
+            ),
+            AchievementRowData(
+                title: "Star Collector II",
+                description: "Earn at least 2 stars on every puzzle level",
+                progressText: "\(twoStar) / \(total)",
+                isUnlocked: done("achievementPuzzleStars2")
+            ),
+            AchievementRowData(
+                title: "Perfectionist",
+                description: "Earn 3 stars on every puzzle level",
+                progressText: "\(threeStar) / \(total)",
+                isUnlocked: done("achievementPuzzleStars3")
+            ),
+            AchievementRowData(
+                title: "Puzzle Pro",
+                description: "Score 10,000 points in a single Puzzle Mode run",
+                progressText: done("achievementPuzzleScore10000") ? "Unlocked" : "Locked",
+                isUnlocked: done("achievementPuzzleScore10000")
             )
         ]
     }

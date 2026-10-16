@@ -4,7 +4,8 @@ import UIKit
 final class GameCenterManager: NSObject {
     static let shared = GameCenterManager()
 
-    let leaderboardID = "com.flyingtire.elementclash.highscore"
+    let leaderboardID = "com.flyingtire.elementclash.highscore"        // Classic / Counter session score
+    let puzzleLeaderboardID = "com.flyingtire.elementclash.puzzle"     // Puzzle Mode run score
 
     var onScoreSubmitted: ((Int) -> Void)?
 
@@ -28,11 +29,14 @@ final class GameCenterManager: NSObject {
         }
     }
 
-    func submitScore(_ score: Int) {
+    /// Submits to the regular leaderboard unless another leaderboard ID is given.
+    func submitScore(_ score: Int, toLeaderboard id: String? = nil) {
         guard GKLocalPlayer.local.isAuthenticated else {
             print("Not authenticated — score not submitted")
             return
         }
+
+        let targetID = id ?? leaderboardID
 
         Task {
             do {
@@ -40,9 +44,9 @@ final class GameCenterManager: NSObject {
                     score,
                     context: 0,
                     player: GKLocalPlayer.local,
-                    leaderboardIDs: [leaderboardID]
+                    leaderboardIDs: [targetID]
                 )
-                print("Score \(score) submitted to Game Center")
+                print("Score \(score) submitted to Game Center (\(targetID))")
                 await MainActor.run {
                     self.onScoreSubmitted?(score)
                 }
@@ -52,6 +56,7 @@ final class GameCenterManager: NSObject {
         }
     }
 
+    /// Opens Game Center's leaderboard list so players can pick Regular or Puzzle Mode.
     func showLeaderboard() {
         guard GKLocalPlayer.local.isAuthenticated else {
             print("Not authenticated with Game Center")
@@ -67,11 +72,7 @@ final class GameCenterManager: NSObject {
                 topVC = presented
             }
 
-            let vc = GKGameCenterViewController(
-                leaderboardID: self.leaderboardID,
-                playerScope: .global,
-                timeScope: .allTime
-            )
+            let vc = GKGameCenterViewController(state: .leaderboards)
             vc.gameCenterDelegate = self
             topVC.present(vc, animated: true)
         }

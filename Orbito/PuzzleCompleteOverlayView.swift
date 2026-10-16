@@ -3,19 +3,18 @@ import SwiftUI
 struct PuzzleCompleteOverlayView: View {
     let chamberName: String
     let shotsUsed: Int
-    let parShots: Int
-    let twoStarShots: Int
-    let oneStarShots: Int
+    let parShots: Int          // shown as "Par" on this screen
+    let threeStarShots: Int    // 3★ when shotsUsed is at or under this
+    let twoStarShots: Int      // 2★ when shotsUsed is at or under this
+    let oneStarShots: Int      // any clear earns at least 1★
+    let stars: Int             // stars earned (computed by the game)
+    let starPoints: Int        // 500 / 300 / 200
+    let aimerBonus: Int        // +100 without aimer, 0 with
+    let usedAimer: Bool
+    let runScore: Int          // run total, including this level
     let hasNextLevel: Bool
     let onNextLevel: () -> Void
     let onBackToMenu: () -> Void
-
-    private var stars: Int {
-        if shotsUsed <= parShots { return 3 }
-        if shotsUsed <= twoStarShots { return 2 }
-        if shotsUsed <= oneStarShots { return 1 }
-        return 1
-    }
 
     private var starText: String {
         String(repeating: "⭐️", count: stars)
@@ -54,6 +53,45 @@ struct PuzzleCompleteOverlayView: View {
                             .bold()
                             .foregroundStyle(shotsUsed <= parShots ? .green : .white.opacity(0.6))
                     }
+
+                    Divider().overlay(.white.opacity(0.15))
+
+                    HStack {
+                        Text("\(stars)★ score")
+                            .foregroundStyle(.white.opacity(0.8))
+                        Spacer()
+                        Text("+\(starPoints)")
+                            .bold()
+                            .foregroundStyle(.yellow)
+                    }
+                    HStack {
+                        Text(usedAimer ? "No-aimer bonus (aimer used)" : "No-aimer bonus")
+                            .foregroundStyle(.white.opacity(0.8))
+                        Spacer()
+                        Text("+\(aimerBonus)")
+                            .bold()
+                            .foregroundStyle(aimerBonus > 0 ? .green : .white.opacity(0.45))
+                    }
+                    HStack {
+                        Text("Level total")
+                            .foregroundStyle(.white.opacity(0.8))
+                        Spacer()
+                        Text("\(starPoints + aimerBonus)")
+                            .bold()
+                            .foregroundStyle(.white)
+                    }
+
+                    Divider().overlay(.white.opacity(0.15))
+
+                    HStack {
+                        Text("Run total")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("\(runScore)")
+                            .font(.title3.bold())
+                            .foregroundStyle(.cyan)
+                    }
                 }
                 .padding(16)
                 .background(
@@ -85,7 +123,7 @@ struct PuzzleCompleteOverlayView: View {
 
                     if hasNextLevel {
                         Button(action: onNextLevel) {
-                            Text("Next Chamber")
+                            Text("Next Level")
                                 .font(.headline.bold())
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
@@ -119,7 +157,8 @@ struct PuzzleCompleteOverlayView: View {
 
 struct PuzzleFailedOverlayView: View {
     let chamberName: String
-    let onRetry: () -> Void
+    let runScore: Int
+    let onStartOver: () -> Void
     let onBackToMenu: () -> Void
 
     var body: some View {
@@ -138,10 +177,24 @@ struct PuzzleFailedOverlayView: View {
                 Text("💀")
                     .font(.system(size: 44))
 
-                Text("You ran out of shots before clearing the chamber.")
+                Text("The run is over — you'll start again from the beginning.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.7))
                     .multilineTextAlignment(.center)
+
+                HStack {
+                    Text("Final run score")
+                        .foregroundStyle(.white.opacity(0.8))
+                    Spacer()
+                    Text("\(runScore)")
+                        .font(.title3.bold())
+                        .foregroundStyle(.cyan)
+                }
+                .padding(14)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.white.opacity(0.08))
+                )
 
                 HStack(spacing: 12) {
                     Button(action: onBackToMenu) {
@@ -161,8 +214,8 @@ struct PuzzleFailedOverlayView: View {
                     }
                     .buttonStyle(.plain)
 
-                    Button(action: onRetry) {
-                        Text("Try Again")
+                    Button(action: onStartOver) {
+                        Text("Start Over")
                             .font(.headline.bold())
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 14)
